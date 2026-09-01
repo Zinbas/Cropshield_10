@@ -117,3 +117,5 @@
 - [x] Add Wikimedia crop imagery as managed-storage fallbacks for scan-history thumbnails.
 - [x] Create showcase records through supported product procedures: 10 new farmer accounts near Nashik, 7 verified experts, 5 approved agricultural stores, a farmer crop, a completed scan, and a linked case.
 - [x] Generate and approve ten additional completed AI scan records for the existing showcase farmers; admin overview now reports 10 approved scans, 11 Nashik-region scan signals, and 71.7% average confidence.
+- [x] Fix regional heatmap rendering so approved coordinate data centers the map on the active region and paints visible risk circles/heat intensity.
+- [x] Add a true full-screen map overlay for mobile and desktop with a clear close control; verify the admin dashboard and full-screen map in the live preview.
