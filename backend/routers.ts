@@ -9,11 +9,24 @@ import { countAdmins, createCase, createCrop, createDrugStore, createExpert, cre
 import { storagePut } from "./storage";
 import { canCreateLocalAdmin, createLocalSession, hashPassword, LOCAL_SESSION_COOKIE, normalizeLocalEmail, toSafeUser, verifyPassword } from "./localAuth";
 
-export async function fetchOpenMeteoWeather(latitude: number, longitude: number, fetcher: typeof fetch = fetch) {
+type WeatherCurrent = { temperature_2m?: number; relative_humidity_2m?: number; precipitation?: number; wind_speed_10m?: number; weather_code?: number };
+type WeatherPayload = { current: WeatherCurrent; units: Record<string, string>; fetchedAt: string; unavailable?: boolean };
+
+export async function fetchOpenMeteoWeather(latitude: number, longitude: number, fetcher: typeof fetch = fetch): Promise<WeatherPayload> {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,weather_code&hourly=precipitation_probability&forecast_days=2&timezone=auto`;
-  const response = await fetcher(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  let response: Response;
+  try {
+    response = await fetcher(url, { signal: controller.signal });
+  } catch (error) {
+    console.warn("[Weather] Upstream request unavailable:", error);
+    return { current: {}, units: {}, fetchedAt: new Date().toISOString(), unavailable: true as const };
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) throw new Error("Weather service unavailable");
-  const json = await response.json() as { current?: { temperature_2m?: number; relative_humidity_2m?: number; precipitation?: number; wind_speed_10m?: number; weather_code?: number }; current_units?: Record<string, string> };
+  const json = await response.json() as { current?: WeatherCurrent; current_units?: Record<string, string> };
   return { current: json.current ?? {}, units: json.current_units ?? {}, fetchedAt: new Date().toISOString() };
 }
 

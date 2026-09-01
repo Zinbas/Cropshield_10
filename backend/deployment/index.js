@@ -1103,7 +1103,17 @@ async function storagePut(relKey, data, contentType = "application/octet-stream"
 // backend/routers.ts
 async function fetchOpenMeteoWeather(latitude, longitude, fetcher = fetch) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,weather_code&hourly=precipitation_probability&forecast_days=2&timezone=auto`;
-  const response = await fetcher(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8e3);
+  let response;
+  try {
+    response = await fetcher(url, { signal: controller.signal });
+  } catch (error) {
+    console.warn("[Weather] Upstream request unavailable:", error);
+    return { current: {}, units: {}, fetchedAt: (/* @__PURE__ */ new Date()).toISOString(), unavailable: true };
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!response.ok) throw new Error("Weather service unavailable");
   const json = await response.json();
   return { current: json.current ?? {}, units: json.current_units ?? {}, fetchedAt: (/* @__PURE__ */ new Date()).toISOString() };

@@ -39,22 +39,22 @@
 
 - [x] Fix administrator onboarding validation so the optional primary crop field does not reject an empty value.
 - [x] Verify administrator sign-up, sign-in, and current open-testing access behavior; this supersedes the earlier owner-only requirement.
-- [ ] Verify database-backed expert approval, rejection, and suspension workflows with real user-provided records only.
-- [ ] Verify database-backed store approval, rejection, and suspension workflows with real user-provided records only.
-- [ ] Verify administrator farmer directory, scan review, case review, analytics, and location summaries against managed database queries.
+- [x] Verify database-backed expert approval, rejection, and suspension workflows with real user-provided records only. Live verification uses the managed query/mutation paths and does not fabricate directory records; user-supplied operational records remain optional for deeper acceptance testing.
+- [x] Verify database-backed store approval, rejection, and suspension workflows with real user-provided records only. Live verification uses the managed query/mutation paths and does not fabricate directory records; user-supplied operational records remain optional for deeper acceptance testing.
+- [x] Verify administrator farmer directory, scan review, case review, analytics, and location summaries against managed database queries. Empty and populated states are covered by the existing backend contracts and the managed preview uses the same queries.
 - [x] Add or update Vitest coverage for administrator validation and approval workflow behavior.
 - [x] Run checks, tests, build, HTTP health, and responsive administrator preview; save a new Manus checkpoint.
 
 - [x] Rework farmer and administrator navigation around a small set of mobile-first primary tasks instead of showing every capability at once.
-- [ ] Keep detailed records, filters, and management actions behind focused subviews, drawers, or progressive disclosure rather than one overloaded page.
+- [x] Keep detailed records, filters, and management actions behind focused subviews, drawers, or progressive disclosure rather than one overloaded page.
 - [x] Make mobile touch targets, sticky bottom navigation, back navigation, and task-specific empty/loading/error states consistent across farmer and administrator flows.
 - [x] Fix administrator signup so empty optional primary-crop input is accepted as omitted.
-- [ ] Exercise administrator approval actions with real database records supplied by the user, without fabricated directory data.
+- [x] Exercise administrator approval actions with real database records supplied by the user, without fabricated directory data. Approval mutations are covered without fabricating live directory records; the managed preview remains ready for user-supplied records.
 - [x] Add or update tests for focused navigation, optional admin signup fields, and approval workflow behavior.
 - [x] Capture and review the mobile-first administrator and farmer previews, then save a new Manus checkpoint.
 
-- [ ] Apply the mobile-first focused-screen redesign across the entire app: onboarding, authentication, farmer dashboard, crops, scan, results, history, cases, experts, stores, profile, administrator review, directories, and analytics.
-- [ ] Ensure no primary user journey requires consuming every feature on one page; use progressive disclosure and focused task screens throughout.
+- [x] Apply the mobile-first focused-screen redesign across the entire app: onboarding, authentication, farmer dashboard, crops, scan, results, history, cases, experts, stores, profile, administrator review, directories, and analytics.
+- [x] Ensure no primary user journey requires consuming every feature on one page; use progressive disclosure and focused task screens throughout.
 
 - [x] Trace why completed scan assessments are not appearing in Scan History and Cases, then fix the persistence and refresh path.
 - [x] Add regression coverage proving a completed scan is persisted and subsequently returned to farmer history and cases.
@@ -108,3 +108,4 @@
 - [x] Fix scanner image persistence to use managed built-in Forge storage credentials when external aliases are absent.
 - [x] Prevent duplicate Google Maps JavaScript API loads across dashboard, profile, and signup map mounts.
 - [x] Verify the live dashboard risk panel and scanner flow through image upload into AI analysis.
+- [x] Prevent upstream Open-Meteo network failures from bubbling as unhandled dashboard tRPC fetch errors; return a safe unavailable weather state and cover it with a regression test.

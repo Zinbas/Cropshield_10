@@ -84,6 +84,8 @@ describe("AgriGuard input contracts", () => {
     const ok = await fetchOpenMeteoWeather(19.99, 73.78, (async () => new Response(JSON.stringify({ current: { temperature_2m: 24 } }), { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch);
     expect(ok.current.temperature_2m).toBe(24);
     await expect(fetchOpenMeteoWeather(19.99, 73.78, (async () => new Response("", { status: 503 })) as typeof fetch)).rejects.toThrow("Weather service unavailable");
+    const fallback = await fetchOpenMeteoWeather(19.99, 73.78, (async () => { throw new TypeError("fetch failed"); }) as typeof fetch);
+    expect(fallback).toMatchObject({ current: {}, units: {}, unavailable: true });
   });
 
   it("includes a newly registered farmer name and saved location in admin insights", () => {
