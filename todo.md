@@ -113,3 +113,6 @@
 - [x] Add regression coverage for heatmap point weighting, invalid coordinates, and zero-scan regions; verify TypeScript, tests, production build, and live preview health.
 - [x] Move detailed regional disease and pest alerts into a dedicated Risk Alerts menu screen.
 - [x] Replace the farmer dashboard alert panel with a compact regional-risk information widget linking to the detailed screen.
+- [x] Add tap/click risk details to the mini-heatmap, a Low/Moderate/High color legend, and four-week historical risk comparison inside the widget.
+- [x] Add Wikimedia crop imagery as managed-storage fallbacks for scan-history thumbnails.
+- [x] Create showcase records through supported product procedures: 10 new farmer accounts near Nashik, 7 verified experts, 5 approved agricultural stores, a farmer crop, a completed scan, and a linked case.
