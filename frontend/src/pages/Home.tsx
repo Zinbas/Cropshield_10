@@ -416,15 +416,19 @@ function StoresPage({ admin = false }: { admin?: boolean }) {
 
 function RiskHeatmap({ points, expanded = false, onToggle }: { points: ReturnType<typeof buildRegionalHeatmapPoints>; expanded?: boolean; onToggle?: () => void }) {
   const pointKey = points.map((point) => `${point.location}:${point.position.lat}:${point.position.lng}:${point.weight}`).join("|");
+  const lats = points.map((point) => point.position.lat);
+  const lngs = points.map((point) => point.position.lng);
+  const minLat = Math.min(...lats); const maxLat = Math.max(...lats); const minLng = Math.min(...lngs); const maxLng = Math.max(...lngs);
   return <div className={`real-map${expanded ? " real-map-expanded" : ""}`}>
     {onToggle && <button type="button" className="map-fullscreen-button" onClick={onToggle}><Maximize2 size={15} /> {expanded ? "Close map" : "Open full screen"}</button>}
     <MapView key={`${expanded}-${pointKey}`} initialCenter={points[0]?.position ?? { lat: 20.5937, lng: 78.9629 }} initialZoom={points.length === 1 ? 8 : 5} onMapReady={(map) => {
-      map.setMapTypeId("hybrid");
+      map.setMapTypeId("roadmap");
       if (points.length === 1) { map.setCenter(points[0].position); map.setZoom(8); }
       else if (points.length > 1) { const bounds = new google.maps.LatLngBounds(); points.forEach((point) => bounds.extend(point.position)); map.fitBounds(bounds, 70); }
       if (window.google?.maps?.visualization && points.length) new google.maps.visualization.HeatmapLayer({ map, data: points.map((point) => ({ location: new google.maps.LatLng(point.position.lat, point.position.lng), weight: point.weight })), radius: expanded ? 52 : 42, opacity: .84, gradient: ["rgba(33,77,58,0)", "rgba(33,77,58,.5)", "rgba(201,145,85,.82)", "rgba(201,75,69,1)"] });
-      points.forEach((point) => { const ratio = point.highRisk / Math.max(1, point.scans); new google.maps.Circle({ map, center: point.position, radius: expanded ? 18000 : 14000, strokeColor: ratio >= .5 ? "#a83435" : ratio ? "#a86622" : "#317853", strokeOpacity: .95, strokeWeight: 2, fillColor: ratio >= .5 ? "#d94b4b" : ratio ? "#d89a45" : "#63a879", fillOpacity: .4 }); new google.maps.Marker({ map, position: point.position, title: `${point.location}: ${heatmapRiskLabel(point.highRisk, point.scans)}` }); });
+      points.forEach((point) => { const ratio = point.highRisk / Math.max(1, point.scans); const color = ratio >= .5 ? "#d92f3d" : ratio ? "#e28a1b" : "#138a50"; new google.maps.Circle({ map, center: point.position, radius: expanded ? 32000 : 24000, strokeColor: color, strokeOpacity: 1, strokeWeight: 4, fillColor: color, fillOpacity: .46, clickable: true }); new google.maps.Marker({ map, position: point.position, title: `${point.location}: ${heatmapRiskLabel(point.highRisk, point.scans)}`, label: { text: `${point.scans}`, color: "#ffffff", fontWeight: "800", fontSize: "14px" }, icon: { path: google.maps.SymbolPath.CIRCLE, scale: 16, fillColor: color, fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 3 } }); });
     }} />
+    {points.length > 0 && <div className="risk-overlay" aria-label="Visible regional risk circles">{points.map((point) => { const ratio = point.highRisk / Math.max(1, point.scans); const tone = ratio >= .5 ? "high" : ratio ? "moderate" : "low"; const left = maxLng === minLng ? 50 : ((point.position.lng - minLng) / (maxLng - minLng)) * 76 + 12; const top = maxLat === minLat ? 50 : ((maxLat - point.position.lat) / (maxLat - minLat)) * 70 + 15; return <div key={`overlay-${point.location}`} className={`risk-overlay-point risk-overlay-${tone}`} style={{ left: `${left}%`, top: `${top}%` }} title={`${point.location}: ${heatmapRiskLabel(point.highRisk, point.scans)}`}><strong>{point.scans}</strong><span>{point.location.split(" · ").at(-1)}</span></div>; })}</div>}
   </div>;
 }
 
