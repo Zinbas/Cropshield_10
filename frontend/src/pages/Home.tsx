@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { MapView } from "@/components/Map";
 import { SUPPORTED_LANGUAGES, getStoredLanguage, setStoredLanguage, translate, type LanguageCode } from "@/lib/i18n";
 import { getDistributionPercentages } from "@/lib/analytics";
+import { buildRegionalRiskAlerts, type RegionalRiskAlert } from "@/lib/regionalRisk";
 import { LOCAL_SIGNUP_ROLES } from "@/lib/authRoles";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -147,6 +148,19 @@ function WeatherWidget() {
   return <section className="surface-card weather-card"><div className="section-heading"><h2>Local weather</h2><CloudSun size={20} /></div>{locationState === "detecting" || weather.isLoading ? <div className="weather-state"><RefreshCw className="spin" size={18} /> Fetching local weather…</div> : weather.isError ? <div className="weather-state"><p>Weather is temporarily unavailable.</p><Button variant="outline" onClick={detect}>Retry location</Button></div> : current ? <><div className="weather-reading"><strong>{current.temperature_2m ?? "—"}°</strong><div><b>Current conditions</b><span>Humidity {current.relative_humidity_2m ?? "—"}% · Wind {current.wind_speed_10m ?? "—"} km/h</span><small>Updated {new Date(weather.data?.fetchedAt ?? Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></div></div><div className={`weather-guidance guidance-${weatherGuidance.tone}`}><ShieldCheck size={16} /><div><b>{weatherGuidance.title}</b><p>{weatherGuidance.detail}</p></div></div></> : <div className="weather-state"><p>Enable location to load local weather.</p><Button variant="outline" onClick={detect}>Use my location</Button></div>}{locationState === "denied" && <p className="weather-note">Location permission was unavailable. Enable it in your browser settings to see local conditions.</p>}</section>;
 }
 
+function RegionalRiskPanel() {
+  const snapshot = trpc.farmer.snapshot.useQuery();
+  const profile = snapshot.data?.profile;
+  const crop = snapshot.data?.crops?.[0];
+  const latitude = Number(profile?.latitude ?? 20.5937);
+  const longitude = Number(profile?.longitude ?? 78.9629);
+  const weather = trpc.weather.current.useQuery({ latitude, longitude });
+  const current = weather.data?.current;
+  const alerts = buildRegionalRiskAlerts({ cropType: crop?.cropType, cropName: crop?.name, region: profile?.region, state: profile?.state, district: profile?.district, temperature: current?.temperature_2m, humidity: current?.relative_humidity_2m, precipitation: current?.precipitation, windSpeed: current?.wind_speed_10m });
+  const tone = (level: RegionalRiskAlert["riskLevel"]) => level === "High" ? "high" : level === "Moderate" ? "medium" : "healthy";
+  return <section className="surface-card regional-risk-panel"><div className="section-heading"><div><p className="eyebrow">PREDICTED RISK · 7–15 DAY OUTLOOK</p><h2>Regional disease & pest alerts</h2></div><AlertTriangle size={20} /></div><p className="regional-risk-intro">Potential threats are estimated from your saved crop, region, and current weather. These are early warnings, not confirmed disease cases.</p>{snapshot.isLoading || weather.isLoading ? <div className="weather-state"><RefreshCw className="spin" size={18} /> Updating regional risk signals…</div> : <div className="regional-risk-list">{alerts.map((alert) => <article className="regional-risk-card" key={alert.id}><div className="regional-risk-card-top"><div><span className="risk-label">{alert.label}</span><h3>{alert.threat}</h3></div><StatusChip tone={tone(alert.riskLevel)}>{alert.riskLevel} risk</StatusChip></div><div className="regional-risk-meta"><span><Sprout size={14} /> {alert.crop}</span><span><MapPin size={14} /> {alert.region}</span></div><p className="regional-risk-reason"><strong>Why this is flagged:</strong> {alert.reason}</p><p className="regional-risk-outlook"><strong>Early warning:</strong> {alert.outlook}</p><div className="regional-risk-actions"><strong>Preventive actions</strong><ul>{alert.actions.map((action) => <li key={action}>{action}</li>)}</ul></div></article>)}</div>}</section>;
+}
+
 function Donut() {
   return <div className="donut-wrap"><div className="donut"><div><strong>85%</strong><span>OPTIMAL</span></div></div></div>;
 }
@@ -164,6 +178,7 @@ function FarmerDashboard({ onScan, user }: { onScan: () => void; user?: { name?:
   const latest = scans[0];
   const recommendation = (() => { try { return latest?.recommendations ? JSON.parse(latest.recommendations)[0] : undefined; } catch { return undefined; } })();
   return <div className="page-stack">
+    <RegionalRiskPanel />
     <details className="mobile-disclosure weather-disclosure"><summary><span><CloudSun size={17} /> Local weather</span><ChevronDown size={17} /></summary><WeatherWidget /></details>
     <section className="welcome-row dashboard-welcome"><div><p className="eyebrow">FARMER WORKSPACE</p><h1>Your crop health,<br /><span>in one place.</span></h1><p className="stable"><Check size={16} /> {snapshot.isLoading ? "Loading your records…" : `${crops.length} crops · ${scans.length} scans · ${cases.length} cases`}</p></div><div className="avatar avatar-large">{getUserInitials(user?.name)}</div></section>
     <button className="scan-hero" onClick={onScan}><Camera size={24} /><span><b>SCAN CROP</b><small>Upload a leaf or field image for an assessment</small></span><ArrowRight size={22} /></button>

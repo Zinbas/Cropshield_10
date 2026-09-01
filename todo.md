@@ -62,7 +62,7 @@
 - [x] Shift the visual theme toward calm agriculture-inspired greens, soil neutrals, and warm natural accents while preserving strong readability.
 - [x] Add restrained smooth transitions and respect reduced-motion preferences without distracting animation.
 - [x] Re-run checks, tests, build, HTTP health, and mobile/desktop preview captures; save a new checkpoint.
-- [ ] Audit and verify consistent back navigation and task-state presentation across the remaining farmer and administrator screens.
+- [x] Audit and verify consistent back navigation and task-state presentation across the remaining farmer and administrator screens.
 - [x] Capture a fresh desktop preview after the latest mobile-first and persistence changes before the next checkpoint.
 
 - [x] Replace placeholder health-distribution analytics with real, correctly computed data and readable zero-state handling.
@@ -75,8 +75,8 @@
 - [x] Correct backend critical-risk distribution counts to include both high and critical approved scans.
 - [x] Make regional map markers react to asynchronous location-summary data changes.
 - [x] Apply reverse-geocoded GPS autofill to signup as well as Profile.
-- [ ] Expand translations beyond navigation into primary headings, forms, actions, and status/error text.
-- [ ] Add explicit analytics, GPS mapping, and map-coordinate regression tests.
+- [x] Expand translations beyond navigation into primary headings, forms, actions, and status/error text.
+- [x] Add explicit analytics, GPS mapping, and map-coordinate regression tests.
 - [x] Re-run validation and save a fresh checkpoint after this analytics/map/GPS/i18n correction batch.
 
 - [x] Allow any user to sign up and sign in as administrator for the current testing phase, while keeping the setting easy to restrict later.
@@ -104,3 +104,7 @@
 - [x] After the farmer GPS autofill fix passes validation, commit and push the completed CropShield changes to the connected GitHub repository; verified on Zinbas/cropshield-5 main.
 - [x] Keep separate village and town fields in farmer signup/profile and persist both through the managed database.
 - [x] Add regression and live verification evidence for both village and town after GPS success.
+- [x] Add regional predicted disease and pest risk alerts with 7–15 day outlooks, reasons, and preventive actions.
+- [x] Fix scanner image persistence to use managed built-in Forge storage credentials when external aliases are absent.
+- [x] Prevent duplicate Google Maps JavaScript API loads across dashboard, profile, and signup map mounts.
+- [x] Verify the live dashboard risk panel and scanner flow through image upload into AI analysis.

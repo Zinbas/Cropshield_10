@@ -9,7 +9,9 @@ export function registerStorageProxy(app: Express) {
       return;
     }
 
-    if (!(process.env.EXTERNAL_SERVICE_URL ?? "") || !(process.env.EXTERNAL_SERVICE_KEY ?? "")) {
+    const forgeBaseUrl = process.env.EXTERNAL_SERVICE_URL ?? process.env.BUILT_IN_FORGE_API_URL ?? "";
+    const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? process.env.BUILT_IN_FORGE_API_KEY ?? "";
+    if (!forgeBaseUrl || !forgeKey) {
       res.status(500).send("Storage proxy not configured");
       return;
     }
@@ -17,12 +19,12 @@ export function registerStorageProxy(app: Express) {
     try {
       const forgeUrl = new URL(
         "v1/storage/presign/get",
-        "".replace(/\/+$/, "") + "/",
+        forgeBaseUrl.replace(/\/+$/, "") + "/",
       );
       forgeUrl.searchParams.set("path", key);
 
       const forgeResp = await fetch(forgeUrl, {
-        headers: { Authorization: `Bearer ${""}` },
+        headers: { Authorization: `Bearer ${forgeKey}` },
       });
 
       if (!forgeResp.ok) {

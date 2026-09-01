@@ -83,6 +83,7 @@ import { cn } from "@/lib/utils";
 declare global {
   interface Window {
     google?: typeof google;
+    __cropShieldMapsPromise?: Promise<void>;
   }
 }
 
@@ -92,21 +93,30 @@ const FORGE_BASE_URL =
   "https://forge.butterfly-effect.dev";
 const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
 
-function loadMapScript() {
-  return new Promise(resolve => {
+function loadMapScript(): Promise<void> {
+  if (window.google?.maps) return Promise.resolve();
+  if (window.__cropShieldMapsPromise) return window.__cropShieldMapsPromise;
+  const promise = new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById("cropshield-google-maps-script") as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener("error", () => reject(new Error("Failed to load Google Maps script")), { once: true });
+      return;
+    }
     const script = document.createElement("script");
+    script.id = "cropshield-google-maps-script";
     script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry`;
     script.async = true;
     script.crossOrigin = "anonymous";
-    script.onload = () => {
-      resolve(null);
-      script.remove(); // Clean up immediately
-    };
-    script.onerror = () => {
-      console.error("Failed to load Google Maps script");
-    };
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Google Maps script"));
     document.head.appendChild(script);
+  }).catch((error) => {
+    window.__cropShieldMapsPromise = undefined;
+    throw error;
   });
+  window.__cropShieldMapsPromise = promise;
+  return promise;
 }
 
 interface MapViewProps {
@@ -114,6 +124,15 @@ interface MapViewProps {
   initialCenter?: google.maps.LatLngLiteral;
   initialZoom?: number;
   onMapReady?: (map: google.maps.Map) => void;
+}
+
+export function toMapCenter(latitude?: number | string | null, longitude?: number | string | null): google.maps.LatLngLiteral {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lng) && lng >= -180 && lng <= 180) {
+    return { lat, lng };
+  }
+  return { lat: 20.5937, lng: 78.9629 };
 }
 
 export function MapView({
@@ -126,6 +145,7 @@ export function MapView({
   const map = useRef<google.maps.Map | null>(null);
 
   const init = usePersistFn(async () => {
+    if (map.current) return;
     await loadMapScript();
     if (!mapContainer.current) {
       console.error("Map container not found");

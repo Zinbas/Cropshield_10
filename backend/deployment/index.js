@@ -825,18 +825,20 @@ function registerStorageProxy(app) {
       res.status(400).send("Missing storage key");
       return;
     }
-    if (!(process.env.EXTERNAL_SERVICE_URL ?? "") || !(process.env.EXTERNAL_SERVICE_KEY ?? "")) {
+    const forgeBaseUrl = process.env.EXTERNAL_SERVICE_URL ?? process.env.BUILT_IN_FORGE_API_URL ?? "";
+    const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? process.env.BUILT_IN_FORGE_API_KEY ?? "";
+    if (!forgeBaseUrl || !forgeKey) {
       res.status(500).send("Storage proxy not configured");
       return;
     }
     try {
       const forgeUrl = new URL(
         "v1/storage/presign/get",
-        "".replace(/\/+$/, "") + "/"
+        forgeBaseUrl.replace(/\/+$/, "") + "/"
       );
       forgeUrl.searchParams.set("path", key);
       const forgeResp = await fetch(forgeUrl, {
-        headers: { Authorization: `Bearer ${""}` }
+        headers: { Authorization: `Bearer ${forgeKey}` }
       });
       if (!forgeResp.ok) {
         const body = await forgeResp.text().catch(() => "");
@@ -1054,8 +1056,8 @@ async function invokeLLM(params) {
 
 // backend/storage.ts
 function getForgeConfig() {
-  const forgeUrl = process.env.EXTERNAL_SERVICE_URL ?? "";
-  const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? "";
+  const forgeUrl = process.env.EXTERNAL_SERVICE_URL ?? process.env.BUILT_IN_FORGE_API_URL ?? "";
+  const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? process.env.BUILT_IN_FORGE_API_KEY ?? "";
   if (!forgeUrl || !forgeKey) {
     throw new Error(
       "Storage config missing: set EXTERNAL_SERVICE_URL and EXTERNAL_SERVICE_KEY"

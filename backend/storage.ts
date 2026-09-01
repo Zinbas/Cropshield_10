@@ -5,8 +5,8 @@
 import { ENV } from "./_core/env";
 
 function getForgeConfig() {
-  const forgeUrl = process.env.EXTERNAL_SERVICE_URL ?? "";
-  const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? "";
+  const forgeUrl = process.env.EXTERNAL_SERVICE_URL ?? process.env.BUILT_IN_FORGE_API_URL ?? "";
+  const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? process.env.BUILT_IN_FORGE_API_KEY ?? "";
 
   if (!forgeUrl || !forgeKey) {
     throw new Error(

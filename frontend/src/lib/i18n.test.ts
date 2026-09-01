@@ -13,4 +13,11 @@ describe("CropShield language catalog", () => {
     expect(translate("bn", "experts")).toBe("বিশেষজ্ঞ");
     expect(translate("en", "unknown-key")).toBe("unknown-key");
   });
+
+  it("translates primary onboarding copy beyond navigation", () => {
+    expect(translate("hi", "heroTitle")).toBe("अपनी फसल को जानें।");
+    expect(translate("mr", "farmerRole")).toBe("मी शेतकरी आहे");
+    expect(translate("as", "useGps")).toBe("GPS স্থান ব্যৱহাৰ কৰক");
+    expect(translate("bn", "pleaseWait")).toBe("অনুগ্রহ করে অপেক্ষা করুন…");
+  });
 });
