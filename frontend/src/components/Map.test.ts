@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toMapCenter } from "./Map";
+import { toMapCenter } from "@/lib/mapUtils";
 
 describe("map coordinate handling", () => {
   it("preserves valid saved farm coordinates", () => {

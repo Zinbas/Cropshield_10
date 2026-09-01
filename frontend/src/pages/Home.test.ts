@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChangeEvent } from "react";
-import { buildRecommendationProgress, formatFieldContext, formatGpsLabel, getExpertContactHref, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
+import { formatFieldContext, formatGpsLabel, getExpertContactHref, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
+import { buildRecommendationProgress } from "@/lib/scanUtils";
 import { LOCAL_SIGNUP_ROLES } from "../lib/authRoles";
 
 describe("CropShield workspace section routing", () => {

@@ -126,15 +126,6 @@ interface MapViewProps {
   onMapReady?: (map: google.maps.Map) => void;
 }
 
-export function toMapCenter(latitude?: number | string | null, longitude?: number | string | null): google.maps.LatLngLiteral {
-  const lat = Number(latitude);
-  const lng = Number(longitude);
-  if (Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lng) && lng >= -180 && lng <= 180) {
-    return { lat, lng };
-  }
-  return { lat: 20.5937, lng: 78.9629 };
-}
-
 export function MapView({
   className,
   initialCenter = { lat: 37.7749, lng: -122.4194 },

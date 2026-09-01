@@ -109,3 +109,5 @@
 - [x] Prevent duplicate Google Maps JavaScript API loads across dashboard, profile, and signup map mounts.
 - [x] Verify the live dashboard risk panel and scanner flow through image upload into AI analysis.
 - [x] Prevent upstream Open-Meteo network failures from bubbling as unhandled dashboard tRPC fetch errors; return a safe unavailable weather state and cover it with a regression test.
+- [x] Add an aggregated regional risk heatmap to the administrator dashboard using approved location summaries, weighted high-risk scan intensity, privacy-safe region rows, and a clear legend.
+- [x] Add regression coverage for heatmap point weighting, invalid coordinates, and zero-scan regions; verify TypeScript, tests, production build, and live preview health.
