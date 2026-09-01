@@ -6,6 +6,7 @@ import { trpc } from "@/lib/trpc";
 import { MapView } from "@/components/Map";
 import { SUPPORTED_LANGUAGES, getStoredLanguage, setStoredLanguage, translate, type LanguageCode } from "@/lib/i18n";
 import { getDistributionPercentages } from "@/lib/analytics";
+import { LOCAL_SIGNUP_ROLES } from "@/lib/authRoles";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
@@ -52,11 +53,6 @@ import {
 
 type Role = "farmer" | "admin";
 type Section = "dashboard" | "crops" | "scan" | "cases" | "profile" | "farmers" | "analytics" | "scans" | "experts" | "stores";
-
-export const LOCAL_SIGNUP_ROLES = [
-  { value: "user", label: "Farmer" },
-  { value: "admin", label: "Administrator" },
-] as const;
 
 export function getUserInitials(name?: string | null) {
   const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);

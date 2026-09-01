@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChangeEvent } from "react";
-import { buildRecommendationProgress, formatFieldContext, formatGpsLabel, getExpertContactHref, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, LOCAL_SIGNUP_ROLES, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
+import { buildRecommendationProgress, formatFieldContext, formatGpsLabel, getExpertContactHref, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
+import { LOCAL_SIGNUP_ROLES } from "../lib/authRoles";
 
 describe("CropShield workspace section routing", () => {
   it("recognizes scan as a primary action route even though it is not persistent navigation", () => {
