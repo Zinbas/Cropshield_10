@@ -17,6 +17,7 @@ describe("CropShield workspace section routing", () => {
     expect(getSection("/farmer/experts")).toBe("experts");
     expect(getSection("/farmer/stores")).toBe("stores");
     expect(getSection("/farmer/profile")).toBe("profile");
+    expect(getSection("/farmer/risks")).toBe("risks");
   });
 
   it("falls back to the dashboard for unknown paths", () => {
