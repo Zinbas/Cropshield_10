@@ -172,8 +172,11 @@ function RiskAlertsWidget() {
   const current = weather.data?.current;
   const alerts = buildRegionalRiskAlerts({ cropType: crop?.cropType, cropName: crop?.name, region: profile?.region, state: profile?.state, district: profile?.district, temperature: current?.temperature_2m, humidity: current?.relative_humidity_2m, precipitation: current?.precipitation, windSpeed: current?.wind_speed_10m });
   const highRisk = alerts.filter((alert) => alert.riskLevel === "High").length;
+  const moderateRisk = alerts.filter((alert) => alert.riskLevel === "Moderate").length;
+  const riskWeight = highRisk ? 3 : moderateRisk ? 2 : 1;
+  const mapCenter = { lat: Number(profile?.latitude ?? 20.5937), lng: Number(profile?.longitude ?? 78.9629) };
   const summary = snapshot.isLoading || weather.isLoading ? "Updating local risk signals…" : alerts.length + " potential threats estimated" + (highRisk ? " · " + highRisk + " high risk" : "") + ". These are predictions, not confirmed cases.";
-  return <section className="surface-card risk-info-widget"><div className="risk-info-icon"><AlertTriangle size={19} /></div><div><p className="eyebrow">REGIONAL RISK INFORMATION</p><h2>Early-warning alerts for your area</h2><p>{summary}</p></div><Link className="risk-info-link" href="/farmer/risks">View alerts <ArrowRight size={16} /></Link></section>;
+  return <section className="surface-card risk-info-widget"><div className="risk-info-copy"><div className="risk-info-icon"><AlertTriangle size={19} /></div><div><p className="eyebrow">REGIONAL RISK INFORMATION</p><h2>Early-warning alerts for your area</h2><p>{summary}</p></div></div><div className="mini-risk-map"><MapView key={`${mapCenter.lat}:${mapCenter.lng}:${riskWeight}`} initialCenter={mapCenter} initialZoom={profile?.latitude ? 10 : 4} onMapReady={(map) => { map.setMapTypeId("hybrid"); const point = { location: new google.maps.LatLng(mapCenter.lat, mapCenter.lng), weight: riskWeight }; if (window.google?.maps?.visualization) new google.maps.visualization.HeatmapLayer({ map, data: [point], radius: 34, opacity: 0.72, gradient: ["rgba(33,77,58,0)", "rgba(33,77,58,.35)", "rgba(201,145,85,.72)", "rgba(201,75,69,.95)"] }); new google.maps.Marker({ map, position: mapCenter, title: `Predicted risk near ${profile?.region || profile?.district || "your saved location"}` }); }} /></div><Link className="risk-info-link" href="/farmer/risks">View alerts <ArrowRight size={16} /></Link></section>;
 }
 
 function RiskAlertsPage() {
