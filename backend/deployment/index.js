@@ -316,6 +316,11 @@ async function updateScan(id, ownerId, data) {
   if (!db) throw new Error("Database unavailable");
   await db.update(scans).set(data).where(and(eq(scans.id, id), eq(scans.ownerId, ownerId)));
 }
+async function approveScan(id) {
+  const db = await getDb();
+  if (!db) throw new Error("Database unavailable");
+  await db.update(scans).set({ approvedAt: /* @__PURE__ */ new Date() }).where(and(eq(scans.id, id), eq(scans.status, "complete")));
+}
 async function createCase(data) {
   const db = await getDb();
   if (!db) throw new Error("Database unavailable");
@@ -1276,6 +1281,7 @@ ${contextSummary}` }, { type: "image_url", image_url: { url: `data:${input.mimeT
     deleteFarmer: adminProcedure2.input(z2.object({ id: z2.number().int().positive() })).mutation(({ input }) => deleteFarmerAccount(input.id)),
     locationSummaries: adminProcedure2.query(() => getAdminLocationSummaries()),
     cases: adminProcedure2.query(() => getApprovedCases()),
+    approveScan: adminProcedure2.input(z2.object({ id: z2.number().int().positive() })).mutation(({ input }) => approveScan(input.id)),
     experts: adminProcedure2.query(() => getAdminExperts()),
     createExpert: adminProcedure2.input(z2.object({ name: z2.string().min(2).max(160), phone: z2.string().max(40).optional(), email: z2.string().email().optional(), qualification: z2.string().max(240).optional(), specialization: z2.string().max(240).optional(), organization: z2.string().max(240).optional(), state: z2.string().max(100).optional(), district: z2.string().max(100).optional(), availability: z2.string().max(160).optional() })).mutation(({ input }) => createExpert(input)),
     setExpertStatus: adminProcedure2.input(z2.object({ id: z2.number().int().positive(), status: z2.enum(["pending", "verified", "rejected", "suspended"]) })).mutation(({ input }) => setExpertStatus(input.id, input.status)),
