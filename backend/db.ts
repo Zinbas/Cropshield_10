@@ -89,6 +89,11 @@ export async function updateScan(id: number, ownerId: number, data: Partial<type
   await db.update(scans).set(data).where(and(eq(scans.id, id), eq(scans.ownerId, ownerId)));
 }
 
+export async function approveScan(id: number) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(scans).set({ approvedAt: new Date() }).where(and(eq(scans.id, id), eq(scans.status, "complete")));
+}
+
 export async function createCase(data: typeof cases.$inferInsert) {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
   await db.insert(cases).values(data);

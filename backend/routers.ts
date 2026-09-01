@@ -5,7 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan } from "./db";
+import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan } from "./db";
 import { storagePut } from "./storage";
 import { canCreateLocalAdmin, createLocalSession, hashPassword, LOCAL_SESSION_COOKIE, normalizeLocalEmail, toSafeUser, verifyPassword } from "./localAuth";
 
@@ -190,6 +190,7 @@ export const appRouter = router({
     deleteFarmer: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deleteFarmerAccount(input.id)),
     locationSummaries: adminProcedure.query(() => getAdminLocationSummaries()),
     cases: adminProcedure.query(() => getApprovedCases()),
+    approveScan: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => approveScan(input.id)),
     experts: adminProcedure.query(() => getAdminExperts()),
     createExpert: adminProcedure.input(z.object({ name: z.string().min(2).max(160), phone: z.string().max(40).optional(), email: z.string().email().optional(), qualification: z.string().max(240).optional(), specialization: z.string().max(240).optional(), organization: z.string().max(240).optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), availability: z.string().max(160).optional() })).mutation(({ input }) => createExpert(input)),
     setExpertStatus: adminProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["pending", "verified", "rejected", "suspended"]) })).mutation(({ input }) => setExpertStatus(input.id, input.status)),
