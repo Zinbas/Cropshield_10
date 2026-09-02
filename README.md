@@ -1,4 +1,4 @@
-# CropShield 5
+# CropShield 6
 
 CropShield is a full-stack agritech platform for farmer registration, crop records, image-based crop health assessment, case follow-up, expert and store directories, weather guidance, and administrator review workflows.
 
@@ -14,6 +14,8 @@ CropShield is a full-stack agritech platform for farmer registration, crop recor
 ## Development
 
 Install dependencies with `pnpm install`, then start the application with `pnpm dev`. Run `pnpm check`, `pnpm test`, and `pnpm build` before opening a pull request. Database commands require a configured `DATABASE_URL` and should be run only against an intended database.
+
+See [`docs/PREVIEW_SETUP_GUIDE.md`](docs/PREVIEW_SETUP_GUIDE.md) for guided managed-preview setup, showcase walkthrough steps, database precautions, troubleshooting, and end-to-end validation commands.
 
 ## Configuration
 

@@ -1,8 +1,8 @@
-# CropShield 5 Handoff
+# CropShield 6 Handoff
 
 ## Purpose
 
-CropShield is a farmer-support application for crop health monitoring, server-side image analysis, local agricultural services, weather-aware guidance, and administrator review workflows. This repository is the CropShield 5 continuation of the existing application architecture; it is not a blank rebuild.
+CropShield is a farmer-support application for crop health monitoring, server-side image analysis, local agricultural services, weather-aware guidance, and administrator review workflows. This repository is the CropShield 6 continuation of the existing application architecture; it is not a blank rebuild.
 
 ## Architecture
 
@@ -42,9 +42,11 @@ Generated build output, dependency directories, local logs, temporary PDFs, edit
 
 Run `pnpm check`, `pnpm test`, and `pnpm build` before handoff or publishing. Preview health must be verified by sending an actual HTTP request to the managed preview URL, not merely by checking whether a process is listening. Complete live camera verification requires an authenticated farmer session and a representative crop image; test post-capture review at desktop and mobile widths, including retakes and selecting the same file. Storage-dependent persistence may remain unavailable when its managed environment variables are absent, but the limitation must be reported honestly.
 
+For guided managed-preview setup, showcase navigation, local development, E2E validation, and troubleshooting, see [`PREVIEW_SETUP_GUIDE.md`](PREVIEW_SETUP_GUIDE.md).
+
 ## References
 
-[1]: https://github.com/Zinbas/cropshield-5 "CropShield 5 source repository"
+[1]: https://github.com/Zinbas/cropshield-6 "CropShield 6 source repository"
 [2]: https://www.manus.im/ "Manus platform"
 [3]: https://react.dev/ "React documentation"
 [4]: https://trpc.io/docs "tRPC documentation"
