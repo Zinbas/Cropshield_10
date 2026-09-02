@@ -17,5 +17,6 @@ export default defineConfig({
     environment: "node",
     setupFiles: ["./vitest.setup.ts"],
     include: ["backend/**/*.test.ts", "backend/**/*.spec.ts", "frontend/**/*.test.ts", "frontend/**/*.spec.ts"],
+    testTimeout: 20000,
   },
 });
