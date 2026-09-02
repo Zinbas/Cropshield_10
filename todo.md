@@ -131,3 +131,10 @@
 - [x] Validate with TypeScript, 63 automated tests, and the production build.
 - [x] Push implementation to GitHub commit 6e05dcc.
 - [x] Verify the latest Vercel deployment metadata and protection settings; build logs contain no errors, project protection is disabled, and the current BLOCKED state is a Vercel deployment-status issue rather than a source or build failure.
+
+
+## Theme and navigation correction — 2026-09-02
+
+- [x] Replace legacy red, violet, and mixed green accents across farmer and administrator screens with the requested olive-green and white theme.
+- [x] Rebalance the mobile navigation into a six-column layout with a centered scan action, evenly spaced destinations, and readable labels.
+- [x] Re-run TypeScript, all 63 tests, and the production build; refresh and visually verify the 375px Manus preview.
