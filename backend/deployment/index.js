@@ -927,9 +927,9 @@ async function notifyOwner(payload) {
       message: "Notification service API key is not configured."
     });
   }
-  const endpoint2 = buildEndpointUrl("");
+  const endpoint = buildEndpointUrl("");
   try {
-    const response = await fetch(endpoint2, {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -1012,8 +1012,87 @@ var systemRouter = router({
 });
 
 // backend/_core/llm.ts
-var DEFAULT_MODEL = "gemini-3-flash-preview";
-function endpoint() {
+var DEFAULT_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+function geminiSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(geminiSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const source = schema;
+  const result = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key === "type" && typeof value === "string") result.type = value.toUpperCase();
+    else if (key === "properties" && value && typeof value === "object") {
+      result.properties = Object.fromEntries(Object.entries(value).map(([name, child]) => [name, geminiSchema(child)]));
+    } else if (key === "items" || key === "additionalProperties") result[key] = geminiSchema(value);
+    else if (key !== "name" && key !== "strict" && key !== "$schema") result[key] = geminiSchema(value);
+  }
+  return result;
+}
+function dataUrlToInlineData(url) {
+  const match = url.match(/^data:([^;]+);base64,([\s\S]+)$/);
+  if (!match) throw new Error("Gemini image input must be a base64 data URL");
+  return { inlineData: { mimeType: match[1], data: match[2] } };
+}
+function toGeminiPart(content) {
+  if (typeof content === "string") return { text: content };
+  if (content.type === "text") return { text: content.text };
+  if (content.type === "image_url") return dataUrlToInlineData(content.image_url.url);
+  throw new Error("Gemini does not support file inputs in this integration");
+}
+function toGeminiMessages(messages) {
+  const system = messages.filter((message) => message.role === "system").map((message) => message.content).flat().map(toGeminiPart);
+  const contents = messages.filter((message) => message.role !== "system").map((message) => ({
+    role: message.role === "assistant" ? "model" : "user",
+    parts: (Array.isArray(message.content) ? message.content : [message.content]).map(toGeminiPart)
+  }));
+  return { systemInstruction: system.length ? { parts: system } : void 0, contents };
+}
+function geminiResponseToInvokeResult(body, model) {
+  const parts = body?.candidates?.[0]?.content?.parts ?? [];
+  const text2 = parts.filter((part) => typeof part?.text === "string").map((part) => part.text).join("");
+  const usage = body?.usageMetadata;
+  return {
+    id: body?.responseId ?? `gemini-${Date.now()}`,
+    created: Math.floor(Date.now() / 1e3),
+    model,
+    choices: [{ index: 0, message: { role: "assistant", content: text2 || null }, finish_reason: body?.candidates?.[0]?.finishReason ?? null }],
+    ...usage ? { usage: { prompt_tokens: usage.promptTokenCount ?? 0, completion_tokens: usage.candidatesTokenCount ?? 0, total_tokens: usage.totalTokenCount ?? 0 } } : {}
+  };
+}
+async function invokeGemini(params) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY is not configured");
+  const model = params.model ?? DEFAULT_MODEL;
+  const responseFormat = params.response_format ?? params.responseFormat ?? (params.output_schema || params.outputSchema ? {
+    type: "json_schema",
+    json_schema: params.output_schema ?? params.outputSchema
+  } : void 0);
+  const generationConfig = {};
+  if (params.max_tokens ?? params.maxTokens) generationConfig.maxOutputTokens = params.max_tokens ?? params.maxTokens;
+  if (responseFormat?.type === "json_object" || responseFormat?.type === "json_schema") {
+    generationConfig.responseMimeType = "application/json";
+    if (responseFormat.type === "json_schema") generationConfig.responseSchema = geminiSchema(responseFormat.json_schema.schema);
+  }
+  const { systemInstruction, contents } = toGeminiMessages(params.messages);
+  const payload = { ...systemInstruction ? { systemInstruction } : {}, contents, ...Object.keys(generationConfig).length ? { generationConfig } : {} };
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const bodyText = await response.text();
+  let body;
+  try {
+    body = bodyText ? JSON.parse(bodyText) : {};
+  } catch {
+    body = { error: { message: bodyText } };
+  }
+  if (!response.ok) {
+    const detail = body?.error?.message ?? response.statusText;
+    throw new Error(`Gemini request failed (${response.status}): ${detail}`);
+  }
+  return geminiResponseToInvokeResult(body, model);
+}
+function manusEndpoint() {
   const base = process.env.BUILT_IN_FORGE_API_URL;
   const key = process.env.BUILT_IN_FORGE_API_KEY;
   if (!base || !key) throw new Error("Manus built-in LLM service is not configured");
@@ -1025,7 +1104,7 @@ function normalizeParams(params) {
     json_schema: params.output_schema ?? params.outputSchema
   } : void 0);
   return {
-    model: params.model ?? DEFAULT_MODEL,
+    model: params.model ?? "gemini-3-flash-preview",
     messages: params.messages,
     ...params.tools ? { tools: params.tools } : {},
     ...params.tool_choice || params.toolChoice ? { tool_choice: params.tool_choice ?? params.toolChoice } : {},
@@ -1035,8 +1114,8 @@ function normalizeParams(params) {
     ...params.reasoning ? { reasoning: params.reasoning } : {}
   };
 }
-async function request(path2, init) {
-  const { url, key } = endpoint();
+async function manusRequest(path2, init) {
+  const { url, key } = manusEndpoint();
   const target = path2 ? `${url.replace(/\/chat\/completions$/, "")}${path2}` : url;
   const response = await fetch(target, {
     ...init,
@@ -1056,7 +1135,7 @@ async function request(path2, init) {
   return parsed;
 }
 async function invokeLLM(params) {
-  return request("", { method: "POST", body: JSON.stringify(normalizeParams(params)) });
+  return process.env.GEMINI_API_KEY ? invokeGemini(params) : manusRequest("", { method: "POST", body: JSON.stringify(normalizeParams(params)) });
 }
 
 // backend/storage.ts
