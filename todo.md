@@ -119,3 +119,15 @@
 - [x] Generate and approve ten additional completed AI scan records for the existing showcase farmers; admin overview now reports 10 approved scans, 11 Nashik-region scan signals, and 71.7% average confidence.
 - [x] Fix regional heatmap rendering so approved coordinate data centers the map on the active region and paints visible risk circles/heat intensity.
 - [x] Add a true full-screen map overlay for mobile and desktop with a clear close control; verify the admin dashboard and full-screen map in the live preview.
+
+
+## UX redesign research and implementation — 2026-09-02
+
+- [x] Research mobile dashboard, agtech, Reddit, accessibility, and visual-system patterns.
+- [x] Preserve separate routes for dashboard, crops, scans, cases, alerts, experts, stores, analytics, farmers, and profile.
+- [x] Replace the dominant green-and-white palette with indigo, mineral teal, saffron, and cool blue-gray tokens.
+- [x] Improve mobile spacing, thumb-reachable navigation, touch targets, focus states, and responsive role selection.
+- [x] Shorten mobile navigation labels and hide secondary utility controls on narrow screens.
+- [x] Validate with TypeScript, 63 automated tests, and the production build.
+- [x] Push implementation to GitHub commit 6e05dcc.
+- [ ] Verify the latest Vercel deployment after its current BLOCKED state is cleared by Vercel.

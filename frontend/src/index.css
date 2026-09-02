@@ -986,3 +986,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 }
 @media(max-width:380px){.login-copy{display:none}.login-layout{display:block}.role-choice-card{box-shadow:none;border:0;padding:8px 2px;background:transparent}.role-choice-card .login-icon{margin-bottom:14px}.login-brand>span{display:none}.metric-grid,.metric-grid.four{grid-template-columns:1fr 1fr}.metric-card{min-height:102px}.metric-card strong{font-size:23px}}
 @media(min-width:761px){.content-inner{max-width:1240px}.login-layout{grid-template-columns:minmax(0,1.05fr) minmax(360px,.8fr)}}
+
+.login-copy h1 span,.welcome-row h1 span{color:var(--primary)}
+.role-choice-icon{background:#d9e5f4!important;color:var(--primary)!important;border-radius:10px!important}
+.role-choice:hover,.role-choice.selected{border-color:var(--primary)!important;background:#f8fbff!important}
