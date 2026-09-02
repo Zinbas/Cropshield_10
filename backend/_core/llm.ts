@@ -40,7 +40,13 @@ export type InvokeResult = {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 };
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+export const CURRENT_GEMINI_MODEL = "gemini-3.7-flash";
+const DEPRECATED_GEMINI_MODELS = new Set(["gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-001"]);
+export function resolveGeminiModel(requested?: string | null) {
+  const model = requested?.trim();
+  return model && !DEPRECATED_GEMINI_MODELS.has(model) ? model : CURRENT_GEMINI_MODEL;
+}
+const DEFAULT_MODEL = resolveGeminiModel(process.env.GEMINI_MODEL);
 
 type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
 type GeminiContent = { role: "user" | "model"; parts: GeminiPart[] };
@@ -98,7 +104,7 @@ function geminiResponseToInvokeResult(body: any, model: string): InvokeResult {
 async function invokeGemini(params: InvokeParams): Promise<InvokeResult> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not configured");
-  const model = params.model ?? DEFAULT_MODEL;
+  const model = resolveGeminiModel(params.model ?? DEFAULT_MODEL);
   const responseFormat = params.response_format ?? params.responseFormat ?? (params.output_schema || params.outputSchema ? {
     type: "json_schema" as const,
     json_schema: params.output_schema ?? params.outputSchema!,
@@ -139,7 +145,7 @@ function normalizeParams(params: InvokeParams) {
     json_schema: params.output_schema ?? params.outputSchema!,
   } : undefined);
   return {
-    model: params.model ?? "gemini-3-flash-preview",
+    model: resolveGeminiModel(params.model),
     messages: params.messages,
     ...(params.tools ? { tools: params.tools } : {}),
     ...(params.tool_choice || params.toolChoice ? { tool_choice: params.tool_choice ?? params.toolChoice } : {}),

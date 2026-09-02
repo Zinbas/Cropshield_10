@@ -1012,7 +1012,13 @@ var systemRouter = router({
 });
 
 // backend/_core/llm.ts
-var DEFAULT_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+var CURRENT_GEMINI_MODEL = "gemini-3.7-flash";
+var DEPRECATED_GEMINI_MODELS = /* @__PURE__ */ new Set(["gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-001"]);
+function resolveGeminiModel(requested) {
+  const model = requested?.trim();
+  return model && !DEPRECATED_GEMINI_MODELS.has(model) ? model : CURRENT_GEMINI_MODEL;
+}
+var DEFAULT_MODEL = resolveGeminiModel(process.env.GEMINI_MODEL);
 function geminiSchema(schema) {
   if (Array.isArray(schema)) return schema.map(geminiSchema);
   if (!schema || typeof schema !== "object") return schema;
@@ -1061,7 +1067,7 @@ function geminiResponseToInvokeResult(body, model) {
 async function invokeGemini(params) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not configured");
-  const model = params.model ?? DEFAULT_MODEL;
+  const model = resolveGeminiModel(params.model ?? DEFAULT_MODEL);
   const responseFormat = params.response_format ?? params.responseFormat ?? (params.output_schema || params.outputSchema ? {
     type: "json_schema",
     json_schema: params.output_schema ?? params.outputSchema
@@ -1104,7 +1110,7 @@ function normalizeParams(params) {
     json_schema: params.output_schema ?? params.outputSchema
   } : void 0);
   return {
-    model: params.model ?? "gemini-3-flash-preview",
+    model: resolveGeminiModel(params.model),
     messages: params.messages,
     ...params.tools ? { tools: params.tools } : {},
     ...params.tool_choice || params.toolChoice ? { tool_choice: params.tool_choice ?? params.toolChoice } : {},
@@ -1301,14 +1307,14 @@ ${contextSummary}` }, { type: "image_url", image_url: { url: `data:${input.mimeT
         let response;
         try {
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
             messages,
             response_format: { type: "json_schema", json_schema: { name: "crop_health_assessment", strict: true, schema: analysisSchema } }
           });
         } catch (structuredError) {
           console.warn("[Scan] Structured AI response failed; retrying with JSON object format:", structuredError);
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
             messages,
             response_format: { type: "json_object" }
           });

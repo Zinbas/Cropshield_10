@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChangeEvent } from "react";
-import { formatFieldContext, formatGpsLabel, getExpertContactHref, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
+import { formatFieldContext, formatGpsLabel, getExpertContactHref, getPrimaryMobileSectionIds, getScanNextSteps, getSection, getUserInitials, handlePhotoInputChange, mapGeocodedAddress, parseRecommendationProgress, validateCropImage } from "./Home";
 import { buildRecommendationProgress } from "@/lib/scanUtils";
 import { LOCAL_SIGNUP_ROLES } from "../lib/authRoles";
 
@@ -22,6 +22,11 @@ describe("CropShield workspace section routing", () => {
 
   it("falls back to the dashboard for unknown paths", () => {
     expect(getSection("/farmer/unknown")).toBe("dashboard");
+  });
+
+  it("keeps the mobile bar to four destinations plus the centered farmer scan action", () => {
+    expect(getPrimaryMobileSectionIds("farmer")).toEqual(["dashboard", "crops", "scans", "cases"]);
+    expect(getPrimaryMobileSectionIds("admin")).toEqual(["dashboard", "scans", "cases", "farmers"]);
   });
 
   it("exposes the configured-owner administrator signup role", () => {

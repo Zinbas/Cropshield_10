@@ -133,14 +133,14 @@ export const appRouter = router({
         let response;
         try {
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
             messages,
             response_format: { type: "json_schema", json_schema: { name: "crop_health_assessment", strict: true, schema: analysisSchema } },
           });
         } catch (structuredError) {
           console.warn("[Scan] Structured AI response failed; retrying with JSON object format:", structuredError);
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-2.5-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
             messages,
             response_format: { type: "json_object" },
           });
