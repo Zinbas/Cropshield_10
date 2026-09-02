@@ -103,13 +103,13 @@ export function getExpertContactHref(expert: ExpertContact, action: "call" | "me
 const nav: { id: Section; label: string; icon: typeof Grid2X2; roles: Role[] }[] = [
   { id: "dashboard", label: "Dashboard", icon: Grid2X2, roles: ["farmer", "admin"] },
   { id: "crops", label: "My Crops", icon: Sprout, roles: ["farmer"] },
-  { id: "scans", label: "Scan History", icon: FileSearch, roles: ["farmer"] },
+  { id: "scans", label: "Scans", icon: FileSearch, roles: ["farmer"] },
   { id: "farmers", label: "Farmers", icon: Users, roles: ["admin"] },
   { id: "scans", label: "Scans", icon: FileSearch, roles: ["admin"] },
   { id: "cases", label: "Cases", icon: ClipboardList, roles: ["farmer", "admin"] },
   { id: "experts", label: "Experts", icon: Stethoscope, roles: ["farmer", "admin"] },
   { id: "stores", label: "Stores", icon: Store, roles: ["farmer", "admin"] },
-  { id: "risks", label: "Risk Alerts", icon: AlertTriangle, roles: ["farmer"] },
+  { id: "risks", label: "Alerts", icon: AlertTriangle, roles: ["farmer"] },
   { id: "analytics", label: "Analytics", icon: BarChart3, roles: ["admin"] },
   { id: "profile", label: "Profile", icon: UserRound, roles: ["farmer", "admin"] },
 ];
