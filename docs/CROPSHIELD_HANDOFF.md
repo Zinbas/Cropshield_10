@@ -44,6 +44,8 @@ Run `pnpm check`, `pnpm test`, and `pnpm build` before handoff or publishing. Pr
 
 For guided managed-preview setup, showcase navigation, local development, E2E validation, and troubleshooting, see [`PREVIEW_SETUP_GUIDE.md`](PREVIEW_SETUP_GUIDE.md).
 
+For a copy-paste task prompt that gives Manus the project context, implementation workflow, acceptance criteria, and handover requirements, see [`CROPSHIELD-6-MANUS-TASK-BRIEF.md`](CROPSHIELD-6-MANUS-TASK-BRIEF.md).
+
 ## References
 
 [1]: https://github.com/Zinbas/cropshield-6 "CropShield 6 source repository"

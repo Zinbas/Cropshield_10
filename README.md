@@ -17,6 +17,8 @@ Install dependencies with `pnpm install`, then start the application with `pnpm 
 
 See [`docs/PREVIEW_SETUP_GUIDE.md`](docs/PREVIEW_SETUP_GUIDE.md) for guided managed-preview setup, showcase walkthrough steps, database precautions, troubleshooting, and end-to-end validation commands.
 
+For a copy-paste Manus instruction set for quickly taking over this project, see [`docs/CROPSHIELD-6-MANUS-TASK-BRIEF.md`](docs/CROPSHIELD-6-MANUS-TASK-BRIEF.md).
+
 ## Configuration
 
 Keep credentials in environment variables or the deployment provider's secret manager. Do not commit `.env` files, generated build output, dependency directories, or local runtime logs.
