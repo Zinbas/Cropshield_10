@@ -33,7 +33,7 @@ export async function createApp(options: { development?: boolean; server?: Retur
 
 async function startServer() {
   const server = createServer();
-  const app = await createApp({ development: true, server });
+  const app = await createApp({ development: process.env.NODE_ENV !== "production", server });
   server.on("request", app);
   const preferredPort = parseInt(process.env.PORT || "3000", 10);
   const port = await findAvailablePort(preferredPort);
