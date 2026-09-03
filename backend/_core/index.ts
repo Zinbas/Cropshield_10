@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { createServer } from "http";
 import net from "net";
 import { createBaseApp } from "./app";
@@ -42,11 +43,9 @@ async function startServer() {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
+  server.listen(port, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
 }
 
-if (process.env.VERCEL !== "1") {
-  startServer().catch(console.error);
-}
+startServer().catch(console.error);

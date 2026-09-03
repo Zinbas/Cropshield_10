@@ -4,14 +4,15 @@
 
 import { ENV } from "./_core/env";
 
+import fs from "fs";
+import path from "path";
+
 function getForgeConfig() {
   const forgeUrl = process.env.EXTERNAL_SERVICE_URL ?? process.env.BUILT_IN_FORGE_API_URL ?? "";
   const forgeKey = process.env.EXTERNAL_SERVICE_KEY ?? process.env.BUILT_IN_FORGE_API_KEY ?? "";
 
   if (!forgeUrl || !forgeKey) {
-    throw new Error(
-      "Storage config missing: set EXTERNAL_SERVICE_URL and EXTERNAL_SERVICE_KEY",
-    );
+    return null;
   }
 
   return { forgeUrl: forgeUrl.replace(/\/+$/, ""), forgeKey };
@@ -33,8 +34,26 @@ export async function storagePut(
   data: Buffer | Uint8Array | string,
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const forgeConfig = getForgeConfig();
   const key = appendHashSuffix(normalizeKey(relKey));
+
+  if (!forgeConfig) {
+    const uploadsDir = path.resolve(process.cwd(), "frontend/public/uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+    
+    const filePath = path.join(uploadsDir, key);
+    const fileDir = path.dirname(filePath);
+    if (!fs.existsSync(fileDir)) {
+      fs.mkdirSync(fileDir, { recursive: true });
+    }
+    
+    fs.writeFileSync(filePath, data);
+    return { key, url: `/uploads/${key}` };
+  }
+
+  const { forgeUrl, forgeKey } = forgeConfig;
 
   // 1. Get presigned PUT URL from Forge
   const presignUrl = new URL("v1/storage/presign/put", forgeUrl + "/");

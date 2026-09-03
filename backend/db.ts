@@ -1,5 +1,6 @@
 import { and, desc, eq, or, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
 import { cases, crops, drugStores, experts, profiles, scans, users, type InsertUser } from "../database/schema";
 import { ENV } from "./_core/env";
 import { toSafeUser } from "./localAuth";
@@ -8,7 +9,7 @@ let _db: ReturnType<typeof drizzle> | null = null;
 
 export async function getDb() {
   if (!_db && process.env.DATABASE_URL) {
-    try { _db = drizzle(process.env.DATABASE_URL); }
+    try { _db = drizzle(postgres(process.env.DATABASE_URL, { prepare: false })); }
     catch (error) { console.warn("[Database] Failed to connect:", error); _db = null; }
   }
   return _db;
@@ -25,7 +26,7 @@ export async function upsertUser(user: InsertUser): Promise<void> {
   }
   values.lastSignedIn = user.lastSignedIn ?? new Date(); updateSet.lastSignedIn = values.lastSignedIn;
   if (user.role !== undefined || user.openId === ENV.ownerOpenId) { values.role = user.role ?? "admin"; updateSet.role = values.role; }
-  await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
+  await db.insert(users).values(values).onConflictDoUpdate({ target: users.openId, set: updateSet });
 }
 
 export async function getUserByOpenId(openId: string) {
@@ -49,8 +50,8 @@ export async function countAdmins() {
 export async function createLocalUser(data: { name: string; email: string; passwordHash: string; role: "user" | "admin" }) {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
   const openId = `local:${data.email}`;
-  const result = await db.insert(users).values({ openId, name: data.name, email: data.email, passwordHash: data.passwordHash, role: data.role, loginMethod: "local-test", lastSignedIn: new Date() });
-  const id = Number(result[0].insertId);
+  const result = await db.insert(users).values({ openId, name: data.name, email: data.email, passwordHash: data.passwordHash, role: data.role, loginMethod: "local-test", lastSignedIn: new Date() }).returning({ id: users.id });
+  const id = result[0].id;
   const created = await getUserByOpenId(openId);
   if (!created) throw new Error(`Local user ${id} could not be loaded after creation`);
   return created;
@@ -64,7 +65,7 @@ export async function updateLastSignedIn(userId: number) {
 export async function updateProfile(userId: number, data: { displayName: string; region?: string; phone?: string; state?: string; district?: string; pinCode?: string; village?: string; town?: string; primaryCrop?: string; farmingExperienceYears?: number; latitude?: number; longitude?: number }) {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
   const values = { userId, displayName: data.displayName, region: data.region, phone: data.phone, state: data.state, district: data.district, pinCode: data.pinCode, village: data.village, town: data.town, primaryCrop: data.primaryCrop, farmingExperienceYears: data.farmingExperienceYears, latitude: data.latitude?.toString(), longitude: data.longitude?.toString() };
-  await db.insert(profiles).values(values).onDuplicateKeyUpdate({ set: { displayName: data.displayName, region: data.region ?? null, phone: data.phone ?? null, state: data.state ?? null, district: data.district ?? null, pinCode: data.pinCode ?? null, village: data.village ?? null, town: data.town ?? null, primaryCrop: data.primaryCrop ?? null, farmingExperienceYears: data.farmingExperienceYears ?? null, latitude: data.latitude?.toString() ?? null, longitude: data.longitude?.toString() ?? null } });
+  await db.insert(profiles).values(values).onConflictDoUpdate({ target: profiles.userId, set: { displayName: data.displayName, region: data.region ?? null, phone: data.phone ?? null, state: data.state ?? null, district: data.district ?? null, pinCode: data.pinCode ?? null, village: data.village ?? null, town: data.town ?? null, primaryCrop: data.primaryCrop ?? null, farmingExperienceYears: data.farmingExperienceYears ?? null, latitude: data.latitude?.toString() ?? null, longitude: data.longitude?.toString() ?? null } });
 }
 
 export async function getFarmerSnapshot(ownerId: number) {
@@ -80,8 +81,8 @@ export async function getFarmerSnapshot(ownerId: number) {
 
 export async function insertScan(data: typeof scans.$inferInsert) {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
-  const result = await db.insert(scans).values(data);
-  return Number(result[0].insertId);
+  const result = await db.insert(scans).values(data).returning({ id: scans.id });
+  return result[0].id;
 }
 
 export async function updateScan(id: number, ownerId: number, data: Partial<typeof scans.$inferInsert>) {
@@ -116,7 +117,22 @@ export async function getOwnerScans(ownerId: number) {
 
 export async function getOwnerCases(ownerId: number) {
   const db = await getDb(); if (!db) return [];
-  return db.select({ id: cases.id, ownerId: cases.ownerId, scanId: cases.scanId, reference: cases.reference, status: cases.status, notes: cases.notes, createdAt: cases.createdAt, updatedAt: cases.updatedAt, disease: scans.disease, riskLevel: scans.riskLevel, recommendationProgress: scans.recommendationProgress, recommendations: scans.recommendations }).from(cases).leftJoin(scans, eq(cases.scanId, scans.id)).where(eq(cases.ownerId, ownerId)).orderBy(desc(cases.createdAt));
+  return db.select({
+    id: cases.id, ownerId: cases.ownerId, scanId: cases.scanId, reference: cases.reference,
+    status: cases.status, notes: cases.notes, createdAt: cases.createdAt, updatedAt: cases.updatedAt,
+    disease: scans.disease, riskLevel: scans.riskLevel, recommendationProgress: scans.recommendationProgress,
+    recommendations: scans.recommendations, imageUrl: scans.imageUrl
+  }).from(cases).leftJoin(scans, eq(cases.scanId, scans.id)).where(eq(cases.ownerId, ownerId)).orderBy(desc(cases.createdAt));
+}
+
+export async function updateCase(id: number, data: { reference?: string; status?: "open" | "resolved" }) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(cases).set({ ...data, updatedAt: new Date() }).where(eq(cases.id, id));
+}
+
+export async function updateScanProgress(scanId: number, progress: string) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(scans).set({ recommendationProgress: progress, updatedAt: new Date() }).where(eq(scans.id, scanId));
 }
 
 export async function getAdminOverview() {
@@ -199,8 +215,8 @@ export function canManageFarmerAccount(targetRole: "user" | "admin") {
 
 export async function setFarmerAccountStatus(userId: number, accountStatus: "active" | "disabled") {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
-  const result = await db.update(users).set({ accountStatus }).where(and(eq(users.id, userId), eq(users.role, "user")));
-  if (!result[0]?.affectedRows) throw new Error("Farmer account not found");
+  const result = await db.update(users).set({ accountStatus }).where(and(eq(users.id, userId), eq(users.role, "user"))).returning({ id: users.id });
+  if (result.length === 0) throw new Error("Farmer account not found");
 }
 
 export async function deleteFarmerAccount(userId: number) {

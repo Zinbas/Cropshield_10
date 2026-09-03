@@ -1,66 +1,77 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar, decimal } from "drizzle-orm/mysql-core";
+import { integer, pgEnum, pgTable, text, timestamp, varchar, decimal, serial, boolean } from "drizzle-orm/pg-core";
 
-export const users = mysqlTable("users", {
-  id: int("id").autoincrement().primaryKey(),
+export const roleEnum = pgEnum("role", ["user", "admin"]);
+export const accountStatusEnum = pgEnum("accountStatus", ["active", "disabled"]);
+export const notificationPreferenceEnum = pgEnum("notificationPreference", ["all", "high_risk", "none"]);
+export const networkModeEnum = pgEnum("networkMode", ["good", "poor", "offline"]);
+export const statusEnum = pgEnum("status", ["healthy", "monitoring", "at_risk"]);
+export const scanStatusEnum = pgEnum("scanStatus", ["queued", "analyzing", "complete", "failed"]);
+export const riskLevelEnum = pgEnum("riskLevel", ["low", "medium", "high", "critical", "unknown"]);
+export const caseStatusEnum = pgEnum("caseStatus", ["open", "reviewing", "resolved"]);
+export const expertStatusEnum = pgEnum("expertStatus", ["pending", "verified", "rejected", "suspended"]);
+export const drugStoreStatusEnum = pgEnum("drugStoreStatus", ["pending", "approved", "rejected", "suspended"]);
+
+export const users = pgTable("users", {
+  id: serial("id").primaryKey(),
   openId: varchar("openId", { length: 64 }).notNull().unique(),
   name: text("name"),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   passwordHash: varchar("passwordHash", { length: 255 }),
-  role: mysqlEnum("role", ["user", "admin"]).default("user").notNull(),
-  accountStatus: mysqlEnum("accountStatus", ["active", "disabled"]).default("active").notNull(),
+  role: roleEnum("role").default("user").notNull(),
+  accountStatus: accountStatusEnum("accountStatus").default("active").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
 });
 
-export const profiles = mysqlTable("profiles", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull().unique(),
+export const profiles = pgTable("profiles", {
+  id: serial("id").primaryKey(),
+  userId: integer("userId").notNull().unique(),
   displayName: varchar("displayName", { length: 160 }).notNull(),
   region: varchar("region", { length: 160 }),
   phone: varchar("phone", { length: 40 }),
-  notificationPreference: mysqlEnum("notificationPreference", ["all", "high_risk", "none"]).default("high_risk").notNull(),
+  notificationPreference: notificationPreferenceEnum("notificationPreference").default("high_risk").notNull(),
   state: varchar("state", { length: 100 }),
   district: varchar("district", { length: 100 }),
   pinCode: varchar("pinCode", { length: 12 }),
   village: varchar("village", { length: 160 }),
   town: varchar("town", { length: 160 }),
   primaryCrop: varchar("primaryCrop", { length: 120 }),
-  farmingExperienceYears: int("farmingExperienceYears"),
+  farmingExperienceYears: integer("farmingExperienceYears"),
   latitude: decimal("latitude", { precision: 10, scale: 7 }),
   longitude: decimal("longitude", { precision: 10, scale: 7 }),
-  networkMode: mysqlEnum("networkMode", ["good", "poor", "offline"]).default("good").notNull(),
+  networkMode: networkModeEnum("networkMode").default("good").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
-export const crops = mysqlTable("crops", {
-  id: int("id").autoincrement().primaryKey(),
-  ownerId: int("ownerId").notNull(),
+export const crops = pgTable("crops", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("ownerId").notNull(),
   name: varchar("name", { length: 160 }).notNull(),
   cropType: varchar("cropType", { length: 80 }).notNull(),
   region: varchar("region", { length: 160 }),
   acreage: decimal("acreage", { precision: 10, scale: 2 }),
-  status: mysqlEnum("status", ["healthy", "monitoring", "at_risk"]).default("healthy").notNull(),
+  status: statusEnum("status").default("healthy").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
-export const scans = mysqlTable("scans", {
-  id: int("id").autoincrement().primaryKey(),
-  ownerId: int("ownerId").notNull(),
-  cropId: int("cropId"),
+export const scans = pgTable("scans", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("ownerId").notNull(),
+  cropId: integer("cropId"),
   imageKey: varchar("imageKey", { length: 500 }).notNull(),
   imageUrl: varchar("imageUrl", { length: 1000 }).notNull(),
-  status: mysqlEnum("status", ["queued", "analyzing", "complete", "failed"]).default("queued").notNull(),
-  riskLevel: mysqlEnum("riskLevel", ["low", "medium", "high", "critical", "unknown"]).default("unknown").notNull(),
+  status: scanStatusEnum("status").default("queued").notNull(),
+  riskLevel: riskLevelEnum("riskLevel").default("unknown").notNull(),
   confidence: decimal("confidence", { precision: 5, scale: 2 }),
   disease: varchar("disease", { length: 180 }),
   soilType: varchar("soilType", { length: 120 }),
   soilPh: decimal("soilPh", { precision: 4, scale: 2 }),
   soilMoisture: varchar("soilMoisture", { length: 80 }),
-  cropCount: int("cropCount"),
+  cropCount: integer("cropCount"),
   landArea: decimal("landArea", { precision: 10, scale: 2 }),
   landUnit: varchar("landUnit", { length: 24 }),
   fieldNotes: text("fieldNotes"),
@@ -70,18 +81,18 @@ export const scans = mysqlTable("scans", {
   recommendations: text("recommendations"),
   approvedAt: timestamp("approvedAt"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
-export const cases = mysqlTable("cases", {
-  id: int("id").autoincrement().primaryKey(),
-  ownerId: int("ownerId").notNull(),
-  scanId: int("scanId").notNull().unique(),
+export const cases = pgTable("cases", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("ownerId").notNull(),
+  scanId: integer("scanId").notNull().unique(),
   reference: varchar("reference", { length: 32 }).notNull().unique(),
-  status: mysqlEnum("status", ["open", "reviewing", "resolved"]).default("open").notNull(),
+  status: caseStatusEnum("status").default("open").notNull(),
   notes: text("notes"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -91,8 +102,8 @@ export type Crop = typeof crops.$inferSelect;
 export type Scan = typeof scans.$inferSelect;
 export type Case = typeof cases.$inferSelect;
 
-export const experts = mysqlTable("experts", {
-  id: int("id").autoincrement().primaryKey(),
+export const experts = pgTable("experts", {
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 160 }).notNull(),
   profilePhotoUrl: varchar("profilePhotoUrl", { length: 1000 }),
   phone: varchar("phone", { length: 40 }),
@@ -100,7 +111,7 @@ export const experts = mysqlTable("experts", {
   qualification: varchar("qualification", { length: 240 }),
   specialization: varchar("specialization", { length: 240 }),
   organization: varchar("organization", { length: 240 }),
-  experienceYears: int("experienceYears"),
+  experienceYears: integer("experienceYears"),
   state: varchar("state", { length: 100 }),
   district: varchar("district", { length: 100 }),
   pinCode: varchar("pinCode", { length: 12 }),
@@ -108,13 +119,13 @@ export const experts = mysqlTable("experts", {
   latitude: decimal("latitude", { precision: 10, scale: 7 }),
   longitude: decimal("longitude", { precision: 10, scale: 7 }),
   availability: varchar("availability", { length: 160 }),
-  status: mysqlEnum("status", ["pending", "verified", "rejected", "suspended"]).default("pending").notNull(),
+  status: expertStatusEnum("status").default("pending").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
-export const drugStores = mysqlTable("drugStores", {
-  id: int("id").autoincrement().primaryKey(),
+export const drugStores = pgTable("drugStores", {
+  id: serial("id").primaryKey(),
   name: varchar("name", { length: 200 }).notNull(),
   ownerContact: varchar("ownerContact", { length: 160 }),
   phone: varchar("phone", { length: 40 }),
@@ -129,13 +140,13 @@ export const drugStores = mysqlTable("drugStores", {
   supportingDocumentUrl: varchar("supportingDocumentUrl", { length: 1000 }),
   categories: text("categories"),
   openingHours: varchar("openingHours", { length: 160 }),
-  status: mysqlEnum("status", ["pending", "approved", "rejected", "suspended"]).default("pending").notNull(),
+  status: drugStoreStatusEnum("status").default("pending").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
 });
 
-export const weatherCache = mysqlTable("weatherCache", {
-  id: int("id").autoincrement().primaryKey(),
+export const weatherCache = pgTable("weatherCache", {
+  id: serial("id").primaryKey(),
   state: varchar("state", { length: 100 }),
   district: varchar("district", { length: 100 }),
   latitude: decimal("latitude", { precision: 10, scale: 7 }).notNull(),

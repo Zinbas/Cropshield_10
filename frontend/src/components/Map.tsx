@@ -76,9 +76,10 @@
 
 /// <reference types="@types/google.maps" />
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePersistFn } from "@/hooks/usePersistFn";
 import { cn } from "@/lib/utils";
+import { InteractiveRiskMap, type RiskZonePoint } from "./InteractiveRiskMap";
 
 declare global {
   interface Window {
@@ -95,6 +96,9 @@ const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
 
 function loadMapScript(): Promise<void> {
   if (window.google?.maps) return Promise.resolve();
+  if (!API_KEY) {
+    return Promise.reject(new Error("No Google Maps API Key provided; using integrated vector risk map"));
+  }
   if (window.__cropShieldMapsPromise) return window.__cropShieldMapsPromise;
   const promise = new Promise<void>((resolve, reject) => {
     const existing = document.getElementById("cropshield-google-maps-script") as HTMLScriptElement | null;
@@ -119,40 +123,53 @@ function loadMapScript(): Promise<void> {
   return promise;
 }
 
-interface MapViewProps {
+export interface MapViewProps {
   className?: string;
   initialCenter?: google.maps.LatLngLiteral;
   initialZoom?: number;
   onMapReady?: (map: google.maps.Map) => void;
+  points?: RiskZonePoint[];
+  onSelectPoint?: (point: RiskZonePoint | null) => void;
+  title?: string;
+  compact?: boolean;
 }
 
 export function MapView({
   className,
-  initialCenter = { lat: 37.7749, lng: -122.4194 },
-  initialZoom = 12,
+  initialCenter = { lat: 20.5937, lng: 78.9629 },
+  initialZoom = 5,
   onMapReady,
+  points,
+  onSelectPoint,
+  title,
+  compact = false,
 }: MapViewProps) {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<google.maps.Map | null>(null);
+  const [useFallback, setUseFallback] = useState(false);
 
   const init = usePersistFn(async () => {
     if (map.current) return;
-    await loadMapScript();
-    if (!mapContainer.current) {
-      console.error("Map container not found");
-      return;
-    }
-    map.current = new window.google.maps.Map(mapContainer.current, {
-      zoom: initialZoom,
-      center: initialCenter,
-      mapTypeControl: true,
-      fullscreenControl: true,
-      zoomControl: true,
-      streetViewControl: true,
-      mapId: "DEMO_MAP_ID",
-    });
-    if (onMapReady) {
-      onMapReady(map.current);
+    try {
+      await loadMapScript();
+      if (!mapContainer.current) return;
+
+      map.current = new window.google.maps.Map(mapContainer.current, {
+        zoom: initialZoom,
+        center: initialCenter,
+        mapTypeControl: false,
+        fullscreenControl: false,
+        zoomControl: true,
+        streetViewControl: false,
+        mapId: "DEMO_MAP_ID",
+      });
+
+      if (onMapReady) {
+        onMapReady(map.current);
+      }
+    } catch (err) {
+      // Gracefully switch to the interactive built-in risk map
+      setUseFallback(true);
     }
   });
 
@@ -160,7 +177,22 @@ export function MapView({
     init();
   }, [init]);
 
+  if (useFallback) {
+    return (
+      <InteractiveRiskMap
+        className={className}
+        initialCenter={initialCenter}
+        initialZoom={initialZoom}
+        points={points}
+        onSelectPoint={onSelectPoint}
+        title={title}
+        compact={compact}
+      />
+    );
+  }
+
   return (
-    <div ref={mapContainer} className={cn("w-full h-[500px]", className)} />
+    <div ref={mapContainer} className={cn("w-full h-[320px] rounded-2xl overflow-hidden", className)} />
   );
 }
+

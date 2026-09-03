@@ -1,61 +1,12 @@
 {
   "version": "7",
-  "dialect": "mysql",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "5",
-      "when": 1788099936386,
-      "tag": "0000_thin_longshot",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "5",
-      "when": 1788100138480,
-      "tag": "0001_wonderful_barracuda",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "5",
-      "when": 1788103230625,
-      "tag": "0002_chilly_human_robot",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "5",
-      "when": 1788103401246,
-      "tag": "0003_curious_dorian_gray",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "5",
-      "when": 1788104090109,
-      "tag": "0004_first_darkhawk",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "5",
-      "when": 1788117579585,
-      "tag": "0005_famous_johnny_storm",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "5",
-      "when": 1788118269368,
-      "tag": "0006_lying_quentin_quire",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "5",
-      "when": 1788119805894,
-      "tag": "0007_next_jimmy_woo",
+      "version": "7",
+      "when": 1788365798681,
+      "tag": "0000_colorful_sinister_six",
       "breakpoints": true
     }
   ]

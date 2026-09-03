@@ -40,7 +40,7 @@ export type InvokeResult = {
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
 };
 
-export const CURRENT_GEMINI_MODEL = "gemini-3.7-flash";
+export const CURRENT_GEMINI_MODEL = "gemini-3.6-flash";
 const DEPRECATED_GEMINI_MODELS = new Set(["gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-flash-latest", "gemini-2.0-flash", "gemini-2.0-flash-001"]);
 export function resolveGeminiModel(requested?: string | null) {
   const model = requested?.trim();
@@ -60,8 +60,8 @@ function geminiSchema(schema: unknown): unknown {
     if (key === "type" && typeof value === "string") result.type = value.toUpperCase();
     else if (key === "properties" && value && typeof value === "object") {
       result.properties = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([name, child]) => [name, geminiSchema(child)]));
-    } else if (key === "items" || key === "additionalProperties") result[key] = geminiSchema(value);
-    else if (key !== "name" && key !== "strict" && key !== "$schema") result[key] = geminiSchema(value);
+    } else if (key === "items") result[key] = geminiSchema(value);
+    else if (key !== "name" && key !== "strict" && key !== "$schema" && key !== "additionalProperties") result[key] = geminiSchema(value);
   }
   return result;
 }
@@ -117,71 +117,48 @@ async function invokeGemini(params: InvokeParams): Promise<InvokeResult> {
   }
   const { systemInstruction, contents } = toGeminiMessages(params.messages);
   const payload = { ...(systemInstruction ? { systemInstruction } : {}), contents, ...(Object.keys(generationConfig).length ? { generationConfig } : {}) };
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const bodyText = await response.text();
-  let body: any;
-  try { body = bodyText ? JSON.parse(bodyText) : {}; } catch { body = { error: { message: bodyText } }; }
-  if (!response.ok) {
-    const detail = body?.error?.message ?? response.statusText;
-    throw new Error(`Gemini request failed (${response.status}): ${detail}`);
+  
+  const retries = 3;
+  let lastError: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(45000),
+      });
+      const bodyText = await response.text();
+      let body: any;
+      try { body = bodyText ? JSON.parse(bodyText) : {}; } catch { body = { error: { message: bodyText } }; }
+      if (!response.ok) {
+        if ((response.status === 503 || response.status === 429 || response.status === 500) && attempt < retries) {
+          console.warn(`[Gemini] API returned ${response.status}. Retrying attempt ${attempt + 1}...`);
+          await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)));
+          continue;
+        }
+        const detail = body?.error?.message ?? response.statusText;
+        throw new Error(`Gemini request failed (${response.status}): ${detail}`);
+      }
+      return geminiResponseToInvokeResult(body, model);
+    } catch (e: any) {
+      if (e.name === "TimeoutError" && attempt < retries) {
+        console.warn(`[Gemini] API timed out. Retrying attempt ${attempt + 1}...`);
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      if (attempt < retries && (e.code === "ECONNRESET" || e.code === "ETIMEDOUT")) {
+        console.warn(`[Gemini] Network error (${e.code}). Retrying...`);
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      lastError = e;
+      if (attempt === retries) throw e;
+    }
   }
-  return geminiResponseToInvokeResult(body, model);
-}
-
-function manusEndpoint() {
-  const base = process.env.BUILT_IN_FORGE_API_URL;
-  const key = process.env.BUILT_IN_FORGE_API_KEY;
-  if (!base || !key) throw new Error("Manus built-in LLM service is not configured");
-  return { url: `${base.replace(/\/$/, "")}/v1/chat/completions`, key };
-}
-
-function normalizeParams(params: InvokeParams) {
-  const responseFormat = params.response_format ?? params.responseFormat ?? (params.output_schema || params.outputSchema ? {
-    type: "json_schema" as const,
-    json_schema: params.output_schema ?? params.outputSchema!,
-  } : undefined);
-  return {
-    model: resolveGeminiModel(params.model),
-    messages: params.messages,
-    ...(params.tools ? { tools: params.tools } : {}),
-    ...(params.tool_choice || params.toolChoice ? { tool_choice: params.tool_choice ?? params.toolChoice } : {}),
-    ...(params.max_tokens || params.maxTokens ? { max_tokens: params.max_tokens ?? params.maxTokens } : {}),
-    ...(responseFormat ? { response_format: responseFormat } : {}),
-    ...(params.thinking ? { thinking: params.thinking } : {}),
-    ...(params.reasoning ? { reasoning: params.reasoning } : {}),
-  };
-}
-
-async function manusRequest(path: string, init?: RequestInit) {
-  const { url, key } = manusEndpoint();
-  const target = path ? `${url.replace(/\/chat\/completions$/, "")}${path}` : url;
-  const response = await fetch(target, {
-    ...init,
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.text();
-  let parsed: unknown;
-  try { parsed = body ? JSON.parse(body) : {}; } catch { parsed = { error: body }; }
-  if (!response.ok) {
-    const detail = typeof parsed === "object" && parsed && "error" in parsed ? String((parsed as { error: unknown }).error) : response.statusText;
-    throw new Error(`Built-in LLM request failed (${response.status}): ${detail}`);
-  }
-  return parsed as InvokeResult;
+  throw lastError;
 }
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  // Gemini is the primary provider when a key is configured. Manus Forge remains a
-  // local/managed-preview fallback so development does not fail before the key is added.
-  return process.env.GEMINI_API_KEY ? invokeGemini(params) : manusRequest("", { method: "POST", body: JSON.stringify(normalizeParams(params)) });
-}
-
-export type ModelInfo = { id: string; object: string; created: number; owned_by: string; pricing?: unknown; capabilities?: unknown };
-export type ModelsResponse = { object: string; data: ModelInfo[] };
-
-export async function listLLMModels(): Promise<ModelsResponse> {
-  return manusRequest("/models", { method: "GET" }) as unknown as Promise<ModelsResponse>;
+  return invokeGemini(params);
 }

@@ -5,7 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan } from "./db";
+import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan, updateCase, updateScanProgress } from "./db";
 import { storagePut } from "./storage";
 import { canCreateLocalAdmin, createLocalSession, hashPassword, LOCAL_SESSION_COOKIE, normalizeLocalEmail, toSafeUser, verifyPassword } from "./localAuth";
 
@@ -101,6 +101,8 @@ export const appRouter = router({
     approvedDrugStores: protectedProcedure.query(() => getApprovedDrugStores()),
     createCrop: protectedProcedure.input(z.object({ name: z.string().min(2).max(120), cropType: z.string().min(2).max(80), region: z.string().max(160).optional() })).mutation(({ ctx, input }) => createCrop({ ownerId: ctx.user.id, ...input })),
     cases: protectedProcedure.query(({ ctx }) => getOwnerCases(ctx.user.id)),
+    updateCase: protectedProcedure.input(z.object({ id: z.number(), reference: z.string().optional(), status: z.enum(["open", "resolved"]).optional() })).mutation(async ({ input }) => { await updateCase(input.id, input); return { success: true }; }),
+    updateScanProgress: protectedProcedure.input(z.object({ scanId: z.number(), progress: z.string() })).mutation(async ({ input }) => { await updateScanProgress(input.scanId, input.progress); return { success: true }; }),
     updateProfile: protectedProcedure.input(z.object({ displayName: z.string().min(2).max(160), region: z.string().max(160).optional(), phone: z.string().max(40).optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), pinCode: z.string().max(12).optional(), village: z.string().max(160).optional(), town: z.string().max(160).optional(), primaryCrop: optionalText(z.string().trim().min(2).max(120)), farmingExperienceYears: z.number().int().min(0).max(100).optional(), latitude: z.number().min(-90).max(90).optional(), longitude: z.number().min(-180).max(180).optional() })).mutation(({ ctx, input }) => updateProfile(ctx.user.id, input)),
     analyzeScan: protectedProcedure.input(z.object({ imageBase64: z.string().min(32).max(12_000_000), mimeType: z.string().regex(/^image\/(jpeg|png|webp)$/), cropId: z.number().int().positive().optional(), fileName: z.string().min(1).max(180), fieldContext: fieldContextSchema })).mutation(async ({ ctx, input }) => {
       const key = `farmer-${ctx.user.id}/scans/${Date.now()}-${input.fileName.replace(/[^a-zA-Z0-9._-]/g, "-")}`;
@@ -133,14 +135,14 @@ export const appRouter = router({
         let response;
         try {
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
             messages,
             response_format: { type: "json_schema", json_schema: { name: "crop_health_assessment", strict: true, schema: analysisSchema } },
           });
         } catch (structuredError) {
           console.warn("[Scan] Structured AI response failed; retrying with JSON object format:", structuredError);
           response = await invokeLLM({
-            model: process.env.GEMINI_MODEL ?? "gemini-3.7-flash",
+            model: process.env.GEMINI_MODEL ?? "gemini-3.6-flash",
             messages,
             response_format: { type: "json_object" },
           });
@@ -149,13 +151,33 @@ export const appRouter = router({
         const content = Array.isArray(rawContent)
           ? rawContent.filter((part) => part.type === "text").map((part) => part.text).join("")
           : rawContent;
+        console.log("[Scan] Raw LLM content:", content);
         const parsed = JSON.parse(typeof content === "string" ? content : "{}");
-        const confidence = Number(parsed.confidence);
-        const riskLevel = z.enum(["low", "medium", "high", "critical"]).parse(parsed.riskLevel);
-        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 100 || typeof parsed.disease !== "string" || typeof parsed.assessment !== "string" || !Array.isArray(parsed.symptoms) || !Array.isArray(parsed.recommendations)) throw new Error("The crop assessment response was not valid structured data");
+        const rawConf = parsed.confidence ?? parsed.confidence_score;
+        const confidence = Number.isFinite(Number(rawConf)) ? Number(rawConf) : 0;
+        
+        const rawRiskVal = parsed.riskLevel ?? parsed.risk_level;
+        let rawRisk = typeof rawRiskVal === "string" ? rawRiskVal.toLowerCase() : "unknown";
+        if (!["low", "medium", "high", "critical"].includes(rawRisk)) { rawRisk = "unknown"; }
+        const riskLevel = rawRisk as "low" | "medium" | "high" | "critical" | "unknown";
+        
+        const rawDisease = parsed.disease ?? parsed.cropType ?? parsed.crop_type;
+        const disease = typeof rawDisease === "string" ? rawDisease : "Unknown";
+        
+        const assessment = typeof parsed.assessment === "string" ? parsed.assessment : "Assessment could not be generated.";
+        
+        const rawSymptoms = parsed.symptoms ?? parsed.visible_symptoms;
+        const symptoms = Array.isArray(rawSymptoms) ? rawSymptoms : (typeof rawSymptoms === "string" ? [rawSymptoms] : []);
+        
+        let recommendations: string[] = [];
+        if (Array.isArray(parsed.recommendations)) {
+          recommendations = parsed.recommendations;
+        } else if (typeof parsed.recommendations === "object" && parsed.recommendations !== null) {
+          recommendations = Object.values(parsed.recommendations).flat().filter(x => typeof x === "string") as string[];
+        }
 
         if (scanId) {
-          await updateScan(scanId, ctx.user.id, { status: "complete", riskLevel, confidence: confidence.toFixed(2), disease: parsed.disease, symptoms: JSON.stringify(parsed.symptoms), assessment: parsed.assessment, recommendations: JSON.stringify(parsed.recommendations), recommendationProgress: JSON.stringify(parsed.recommendations.map((step: string) => ({ step, completed: false }))) });
+          await updateScan(scanId, ctx.user.id, { status: "complete", riskLevel, confidence: confidence.toFixed(2), disease, symptoms: JSON.stringify(symptoms), assessment, recommendations: JSON.stringify(recommendations), recommendationProgress: JSON.stringify(recommendations.map((step: string) => ({ step, completed: false }))) });
         } else {
           console.warn("[Scan] AI succeeded, but no persistent scan record was created.");
         }
@@ -164,7 +186,7 @@ export const appRouter = router({
           try { await notifyOwner({ title: "High-risk CropShield scan", content: `A new high-risk crop scan was analyzed for farmer ${ctx.user.name ?? ctx.user.id}. Review the approved workflow before system-wide publication.` }); }
           catch (notificationError) { console.warn("[Scan] Notification failed after successful analysis:", notificationError); }
         }
-        return { scanId: scanId ?? 0, imageUrl: stored?.url ?? "", fieldContext: input.fieldContext ?? null, recommendationProgress: parsed.recommendations.map((step: string) => ({ step, completed: false })), ...parsed };
+        return { scanId: scanId ?? 0, imageUrl: stored?.url ?? "", fieldContext: input.fieldContext ?? null, recommendationProgress: recommendations.map((step: string) => ({ step, completed: false })), disease, assessment, symptoms, recommendations, riskLevel, confidence };
       } catch (error) {
         if (scanId) {
           try { await updateScan(scanId, ctx.user.id, { status: "failed" }); }
