@@ -103,3 +103,70 @@ describe("AgriGuard input contracts", () => {
     expect(summary?.highRisk).toBe(1);
   });
 });
+
+
+describe("Risk prediction and outbreak routes", () => {
+  it("allows farmers to read active risk predictions", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    const result = await caller.risk.active();
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("allows farmers to read risk prediction history", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    const result = await caller.risk.history();
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("allows farmers to read active regional outbreaks", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    const result = await caller.risk.outbreaks();
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("rejects risk dismiss with invalid id", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    await expect(caller.risk.dismiss({ id: 0 })).rejects.toThrow();
+  });
+
+  it("rejects reportThreat with too-short threatType", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    await expect(caller.farmer.reportThreat({ threatType: "x", riskScore: 50, riskLevel: "medium" })).rejects.toThrow();
+  });
+
+  it("rejects reportThreat with out-of-range riskScore", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    await expect(caller.farmer.reportThreat({ threatType: "Fungal blight", riskScore: 150, riskLevel: "high" })).rejects.toThrow();
+  });
+
+  it("accepts valid reportThreat and returns success", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    const result = await caller.farmer.reportThreat({ threatType: "Fungal blight on leaves", riskScore: 72, riskLevel: "high" });
+    expect(result.success).toBe(true);
+    expect(result.message).toContain("regional outbreak tracker");
+  });
+
+  it("allows admins to read all regional outbreaks", async () => {
+    const caller = appRouter.createCaller(context("admin"));
+    const result = await caller.admin.regionalOutbreaks();
+    expect(Array.isArray(result)).toBe(true);
+  });
+
+  it("blocks farmers from admin regional outbreak access", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    await expect(caller.admin.regionalOutbreaks()).rejects.toThrow("Administrator access required");
+  });
+
+  it("allows admins to read risk prediction overview stats", async () => {
+    const caller = appRouter.createCaller(context("admin"));
+    const result = await caller.admin.riskOverview();
+    expect(result).toHaveProperty("totalPredictions");
+    expect(result).toHaveProperty("activePredictions");
+  });
+
+  it("blocks farmers from admin risk overview", async () => {
+    const caller = appRouter.createCaller(context("user"));
+    await expect(caller.admin.riskOverview()).rejects.toThrow("Administrator access required");
+  });
+});
+

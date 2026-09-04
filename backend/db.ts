@@ -1,7 +1,7 @@
 import { and, desc, eq, or, sql } from "drizzle-orm";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { cases, crops, drugStores, experts, profiles, scans, users, type InsertUser } from "../database/schema";
+import { cases, crops, drugStores, experts, profiles, scans, users, riskPredictions, riskAlertHistory, regionalOutbreaks, type InsertUser } from "../database/schema";
 import { ENV } from "./_core/env";
 import { toSafeUser } from "./localAuth";
 
@@ -135,30 +135,66 @@ export async function updateScanProgress(scanId: number, progress: string) {
   await db.update(scans).set({ recommendationProgress: progress, updatedAt: new Date() }).where(eq(scans.id, scanId));
 }
 
-export async function getAdminOverview() {
+export type AdminTerritory = { state?: string | null; district?: string | null };
+
+function buildTerritoryFarmerIds(db: ReturnType<typeof drizzle>, territory?: AdminTerritory) {
+  // Returns a subquery of user IDs matching the territory, or null if no filtering needed
+  if (!territory?.state) return null;
+  const conditions = [eq(profiles.state, territory.state)];
+  if (territory.district) conditions.push(eq(profiles.district, territory.district));
+  return db.select({ userId: profiles.userId }).from(profiles).where(and(...conditions));
+}
+
+export async function getAdminOverview(territory?: AdminTerritory) {
   const db = await getDb(); if (!db) return { totals: { farmers: 0, scans: 0, highRisk: 0, openCases: 0, avgConfidence: 0 }, distribution: { healthy: 0, monitoring: 0, critical: 0 }, recentScans: [], regions: [] };
+  // If territory is set, get the filtered farmer IDs first
+  let territoryFilter: number[] | null = null;
+  if (territory?.state) {
+    const conditions = [eq(profiles.state, territory.state)];
+    if (territory.district) conditions.push(eq(profiles.district, territory.district));
+    const rows = await db.select({ userId: profiles.userId }).from(profiles).where(and(...conditions));
+    territoryFilter = rows.map(r => r.userId);
+    if (territoryFilter.length === 0) return { totals: { farmers: 0, scans: 0, highRisk: 0, openCases: 0, avgConfidence: 0 }, distribution: { healthy: 0, monitoring: 0, critical: 0 }, recentScans: [], regions: [] };
+  }
+  const farmerCond = territoryFilter ? and(eq(users.role, "user"), sql`${users.id} IN (${sql.join(territoryFilter.map(id => sql`${id}`), sql`, `)})`) : eq(users.role, "user");
+  const scanBase = territoryFilter ? and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`, sql`${scans.ownerId} IN (${sql.join(territoryFilter.map(id => sql`${id}`), sql`, `)})`) : and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`);
+  const caseCond = territoryFilter ? and(sql`${cases.status} <> 'resolved'`, sql`${cases.ownerId} IN (${sql.join(territoryFilter.map(id => sql`${id}`), sql`, `)})`) : sql`${cases.status} <> 'resolved'`;
   const [farmerCount, scanCount, highRiskCount, openCaseCount, healthyCount, monitoringCount, criticalCount, avgConfidence, recentScans, regions] = await Promise.all([
-    db.select({ count: sql<number>`count(*)` }).from(users).where(eq(users.role, "user")),
-    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(eq(scans.status, "complete"), or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select({ count: sql<number>`count(*)` }).from(cases).where(sql`${cases.status} <> 'resolved'`),
-    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(eq(scans.status, "complete"), eq(scans.riskLevel, "low"), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(eq(scans.status, "complete"), eq(scans.riskLevel, "medium"), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(eq(scans.status, "complete"), or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select({ average: sql<number>`avg(${scans.confidence})` }).from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`)),
-    db.select().from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`)).orderBy(desc(scans.createdAt)).limit(20),
-    db.select({ region: crops.region, count: sql<number>`count(*)` }).from(crops).groupBy(crops.region).orderBy(desc(sql`count(*)`)).limit(10),
+    db.select({ count: sql<number>`count(*)` }).from(users).where(farmerCond),
+    db.select({ count: sql<number>`count(*)` }).from(scans).where(scanBase),
+    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(scanBase, or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")))),
+    db.select({ count: sql<number>`count(*)` }).from(cases).where(caseCond),
+    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(scanBase, eq(scans.riskLevel, "low"))),
+    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(scanBase, eq(scans.riskLevel, "medium"))),
+    db.select({ count: sql<number>`count(*)` }).from(scans).where(and(scanBase, or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")))),
+    db.select({ average: sql<number>`avg(${scans.confidence})` }).from(scans).where(scanBase),
+    db.select().from(scans).where(scanBase).orderBy(desc(scans.createdAt)).limit(20),
+    db.select({ region: crops.region, count: sql<number>`count(*)` }).from(crops).where(territoryFilter ? sql`${crops.ownerId} IN (${sql.join(territoryFilter.map(id => sql`${id}`), sql`, `)})` : sql`1=1`).groupBy(crops.region).orderBy(desc(sql`count(*)`)).limit(10),
   ]);
   return { totals: { farmers: Number(farmerCount[0]?.count ?? 0), scans: Number(scanCount[0]?.count ?? 0), highRisk: Number(highRiskCount[0]?.count ?? 0), openCases: Number(openCaseCount[0]?.count ?? 0), avgConfidence: Number(avgConfidence[0]?.average ?? 0) }, distribution: { healthy: Number(healthyCount[0]?.count ?? 0), monitoring: Number(monitoringCount[0]?.count ?? 0), critical: Number(criticalCount[0]?.count ?? 0) }, recentScans, regions };
 }
 
-export async function getApprovedCases() {
+export async function getApprovedCases(territory?: AdminTerritory) {
   const db = await getDb(); if (!db) return [];
-  return db.select({ id: cases.id, ownerId: cases.ownerId, scanId: cases.scanId, reference: cases.reference, status: cases.status, notes: cases.notes, createdAt: cases.createdAt, updatedAt: cases.updatedAt, disease: scans.disease, riskLevel: scans.riskLevel, recommendationProgress: scans.recommendationProgress, recommendations: scans.recommendations }).from(cases).leftJoin(scans, eq(cases.scanId, scans.id)).where(eq(cases.status, "reviewing")).orderBy(desc(cases.createdAt));
+  if (territory?.state) {
+    const conditions = [eq(profiles.state, territory.state)];
+    if (territory.district) conditions.push(eq(profiles.district, territory.district));
+    const farmerIds = (await db.select({ userId: profiles.userId }).from(profiles).where(and(...conditions))).map(r => r.userId);
+    if (farmerIds.length === 0) return [];
+    return db.select({ id: cases.id, ownerId: cases.ownerId, scanId: cases.scanId, reference: cases.reference, status: cases.status, notes: cases.notes, createdAt: cases.createdAt, updatedAt: cases.updatedAt, disease: scans.disease, riskLevel: scans.riskLevel, recommendationProgress: scans.recommendationProgress, recommendations: scans.recommendations }).from(cases).leftJoin(scans, eq(cases.scanId, scans.id)).where(sql`${cases.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`).orderBy(desc(cases.createdAt));
+  }
+  return db.select({ id: cases.id, ownerId: cases.ownerId, scanId: cases.scanId, reference: cases.reference, status: cases.status, notes: cases.notes, createdAt: cases.createdAt, updatedAt: cases.updatedAt, disease: scans.disease, riskLevel: scans.riskLevel, recommendationProgress: scans.recommendationProgress, recommendations: scans.recommendations }).from(cases).leftJoin(scans, eq(cases.scanId, scans.id)).orderBy(desc(cases.createdAt));
 }
 
-export async function getApprovedDirectory() {
+export async function getApprovedDirectory(territory?: AdminTerritory) {
   const db = await getDb(); if (!db) return [];
+  const conditions = [eq(users.role, "user")];
+  if (territory?.state) {
+    // Join profiles to filter by territory
+    const farmerIds = (await db.select({ userId: profiles.userId }).from(profiles).where(and(eq(profiles.state, territory.state), ...(territory.district ? [eq(profiles.district, territory.district)] : [])))).map(r => r.userId);
+    if (farmerIds.length === 0) return [];
+    return db.select({ user: users, profile: profiles }).from(users).leftJoin(profiles, eq(profiles.userId, users.id)).where(and(eq(users.role, "user"), sql`${users.id} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`)).orderBy(desc(users.createdAt));
+  }
   return db.select({ user: users, profile: profiles }).from(users).leftJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.role, "user")).orderBy(desc(users.createdAt));
 }
 
@@ -179,14 +215,16 @@ export function summarizeApprovedLocations(farmerRows: AdminLocationFarmer[], ap
   return Array.from(groups.values()).map((group) => ({ ...group, crops: Array.from(group.crops), diseases: Array.from(group.diseases) })).sort((a, b) => b.highRisk - a.highRisk || b.farmers - a.farmers);
 }
 
-export async function getAdminLocationSummaries() {
+export async function getAdminLocationSummaries(territory?: AdminTerritory) {
   const db = await getDb(); if (!db) return [];
-  const [farmerRows, approvedScans, farmerCrops] = await Promise.all([
-    db.select({ user: users, profile: profiles }).from(users).leftJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.role, "user")),
-    db.select().from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`)).orderBy(desc(scans.createdAt)),
-    db.select().from(crops),
+  const dirRows = await getApprovedDirectory(territory);
+  const farmerIds = dirRows.map(r => r.user.id);
+  if (farmerIds.length === 0) return [];
+  const [approvedScans, farmerCrops] = await Promise.all([
+    db.select().from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`, sql`${scans.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`)).orderBy(desc(scans.createdAt)),
+    db.select().from(crops).where(sql`${crops.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`),
   ]);
-  return summarizeApprovedLocations(farmerRows, approvedScans, farmerCrops);
+  return summarizeApprovedLocations(dirRows, approvedScans, farmerCrops);
 }
 
 export function buildAdminFarmerInsights(farmerRows: AdminLocationFarmer[], approvedScans: AdminLocationScan[], farmerCrops: AdminLocationCrop[]) {
@@ -199,14 +237,16 @@ export function buildAdminFarmerInsights(farmerRows: AdminLocationFarmer[], appr
   });
 }
 
-export async function getAdminFarmerInsights() {
+export async function getAdminFarmerInsights(territory?: AdminTerritory) {
   const db = await getDb(); if (!db) return [];
-  const [farmerRows, approvedScans, farmerCrops] = await Promise.all([
-    db.select({ user: users, profile: profiles }).from(users).leftJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.role, "user")),
-    db.select().from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`)).orderBy(desc(scans.createdAt)),
-    db.select().from(crops),
+  const dirRows = await getApprovedDirectory(territory);
+  const farmerIds = dirRows.map(r => r.user.id);
+  if (farmerIds.length === 0) return [];
+  const [approvedScans, farmerCrops] = await Promise.all([
+    db.select().from(scans).where(and(eq(scans.status, "complete"), sql`${scans.approvedAt} IS NOT NULL`, sql`${scans.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`)).orderBy(desc(scans.createdAt)),
+    db.select().from(crops).where(sql`${crops.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`),
   ]);
-  return buildAdminFarmerInsights(farmerRows, approvedScans, farmerCrops).map((entry) => ({ ...entry, user: toSafeUser(entry.user) }));
+  return buildAdminFarmerInsights(dirRows, approvedScans, farmerCrops).map((entry) => ({ ...entry, user: toSafeUser(entry.user) }));
 }
 
 export function canManageFarmerAccount(targetRole: "user" | "admin") {
@@ -250,9 +290,10 @@ export async function getVerifiedExperts(location?: { state?: string; district?:
   return rankExpertsByLocation(rows, location);
 }
 
-export async function getApprovedDrugStores() {
+export async function getApprovedDrugStores(location?: { state?: string; district?: string }) {
   const db = await getDb(); if (!db) return [];
-  return db.select().from(drugStores).where(eq(drugStores.status, "approved")).orderBy(desc(drugStores.updatedAt));
+  const rows = await db.select().from(drugStores).where(eq(drugStores.status, "approved")).orderBy(desc(drugStores.updatedAt));
+  return rankExpertsByLocation(rows, location);
 }
 
 export async function getAdminExperts() {
@@ -283,4 +324,239 @@ export async function createDrugStore(data: typeof drugStores.$inferInsert) {
 export async function setDrugStoreStatus(id: number, status: "pending" | "approved" | "rejected" | "suspended") {
   const db = await getDb(); if (!db) throw new Error("Database unavailable");
   await db.update(drugStores).set({ status }).where(eq(drugStores.id, id));
+}
+
+// ─── Risk Predictions CRUD ───────────────────────────────────────────
+
+export async function insertRiskPrediction(data: typeof riskPredictions.$inferInsert) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  const result = await db.insert(riskPredictions).values(data).returning({ id: riskPredictions.id });
+  return result[0].id;
+}
+
+export async function getActiveRiskPredictions(ownerId: number) {
+  const db = await getDb(); if (!db) return [];
+  const now = new Date();
+  return db.select().from(riskPredictions)
+    .where(and(
+      eq(riskPredictions.ownerId, ownerId),
+      eq(riskPredictions.dismissed, false),
+      sql`${riskPredictions.validUntil} > ${now}`,
+    ))
+    .orderBy(desc(riskPredictions.riskScore));
+}
+
+export async function getRiskPredictionHistory(ownerId: number, days = 30) {
+  const db = await getDb(); if (!db) return [];
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  return db.select().from(riskPredictions)
+    .where(and(
+      eq(riskPredictions.ownerId, ownerId),
+      sql`${riskPredictions.createdAt} >= ${since}`,
+    ))
+    .orderBy(desc(riskPredictions.createdAt))
+    .limit(50);
+}
+
+export async function dismissRiskPrediction(id: number, ownerId: number) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(riskPredictions).set({ dismissed: true }).where(and(eq(riskPredictions.id, id), eq(riskPredictions.ownerId, ownerId)));
+}
+
+export async function linkPredictionToScan(predictionId: number, scanId: number) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(riskPredictions).set({ triggeredScanId: scanId }).where(eq(riskPredictions.id, predictionId));
+}
+
+// ─── Risk Alert History CRUD ─────────────────────────────────────────
+
+export async function insertAlertHistory(data: typeof riskAlertHistory.$inferInsert) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.insert(riskAlertHistory).values(data);
+}
+
+export async function updateAlertFeedback(predictionId: number, ownerId: number, feedback: { feedbackRating: number; feedbackNotes?: string; actionTaken?: string }) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  const existing = await db.select().from(riskAlertHistory)
+    .where(and(eq(riskAlertHistory.predictionId, predictionId), eq(riskAlertHistory.ownerId, ownerId)))
+    .limit(1);
+  if (existing.length > 0) {
+    await db.update(riskAlertHistory).set({
+      feedbackRating: feedback.feedbackRating,
+      feedbackNotes: feedback.feedbackNotes ?? null,
+      actionTaken: feedback.actionTaken ?? null,
+    }).where(eq(riskAlertHistory.id, existing[0].id));
+  } else {
+    await db.insert(riskAlertHistory).values({
+      predictionId,
+      ownerId,
+      alertType: "in_app",
+      feedbackRating: feedback.feedbackRating,
+      feedbackNotes: feedback.feedbackNotes,
+      actionTaken: feedback.actionTaken,
+    });
+  }
+}
+
+// ─── Regional Outbreaks CRUD ─────────────────────────────────────────
+
+export async function upsertRegionalOutbreak(data: {
+  state: string; district: string; threatType: string;
+  reportCount: number; averageRiskScore: number;
+  outbreakLevel: "watch" | "warning" | "outbreak";
+  affectedCropTypes?: string[];
+}) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  const existing = await db.select().from(regionalOutbreaks)
+    .where(and(
+      eq(regionalOutbreaks.state, data.state),
+      eq(regionalOutbreaks.district, data.district),
+      eq(regionalOutbreaks.threatType, data.threatType),
+      sql`${regionalOutbreaks.resolvedAt} IS NULL`,
+    ))
+    .limit(1);
+  if (existing.length > 0) {
+    await db.update(regionalOutbreaks).set({
+      reportCount: data.reportCount,
+      averageRiskScore: data.averageRiskScore,
+      outbreakLevel: data.outbreakLevel,
+      affectedCropTypes: data.affectedCropTypes ? JSON.stringify(data.affectedCropTypes) : existing[0].affectedCropTypes,
+      updatedAt: new Date(),
+    }).where(eq(regionalOutbreaks.id, existing[0].id));
+    return existing[0].id;
+  } else {
+    const result = await db.insert(regionalOutbreaks).values({
+      state: data.state,
+      district: data.district,
+      threatType: data.threatType,
+      reportCount: data.reportCount,
+      averageRiskScore: data.averageRiskScore,
+      outbreakLevel: data.outbreakLevel,
+      affectedCropTypes: data.affectedCropTypes ? JSON.stringify(data.affectedCropTypes) : null,
+    }).returning({ id: regionalOutbreaks.id });
+    return result[0].id;
+  }
+}
+
+export async function getActiveOutbreaks(filters?: { state?: string; district?: string }) {
+  const db = await getDb(); if (!db) return [];
+  const conditions = [sql`${regionalOutbreaks.resolvedAt} IS NULL`];
+  if (filters?.state) conditions.push(eq(regionalOutbreaks.state, filters.state));
+  if (filters?.district) conditions.push(eq(regionalOutbreaks.district, filters.district));
+  return db.select().from(regionalOutbreaks)
+    .where(and(...conditions))
+    .orderBy(desc(regionalOutbreaks.reportCount));
+}
+
+export async function resolveOutbreak(id: number) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(regionalOutbreaks).set({ resolvedAt: new Date(), updatedAt: new Date() }).where(eq(regionalOutbreaks.id, id));
+}
+
+export async function escalateOutbreak(id: number) {
+  const db = await getDb(); if (!db) throw new Error("Database unavailable");
+  await db.update(regionalOutbreaks).set({ officerNotified: true, updatedAt: new Date() }).where(eq(regionalOutbreaks.id, id));
+}
+
+export async function getAllOutbreaks() {
+  const db = await getDb(); if (!db) return [];
+  return db.select().from(regionalOutbreaks).orderBy(desc(regionalOutbreaks.updatedAt)).limit(50);
+}
+
+export async function getRegionalScanStats(state: string, district: string, days = 14) {
+  const db = await getDb(); if (!db) return { totalScans: 0, highRiskScans: 0, uniqueFarmers: 0, topDiseases: [] as { disease: string; count: number }[] };
+  const since = new Date();
+  since.setDate(since.getDate() - days);
+  const [totalResult, highRiskResult, farmerResult, diseaseResult] = await Promise.all([
+    db.select({ count: sql<number>`count(*)` }).from(scans)
+      .innerJoin(profiles, eq(scans.ownerId, profiles.userId))
+      .where(and(eq(profiles.state, state), eq(profiles.district, district), eq(scans.status, "complete"), sql`${scans.createdAt} >= ${since}`)),
+    db.select({ count: sql<number>`count(*)` }).from(scans)
+      .innerJoin(profiles, eq(scans.ownerId, profiles.userId))
+      .where(and(eq(profiles.state, state), eq(profiles.district, district), eq(scans.status, "complete"), or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")), sql`${scans.createdAt} >= ${since}`)),
+    db.select({ count: sql<number>`count(distinct ${scans.ownerId})` }).from(scans)
+      .innerJoin(profiles, eq(scans.ownerId, profiles.userId))
+      .where(and(eq(profiles.state, state), eq(profiles.district, district), eq(scans.status, "complete"), or(eq(scans.riskLevel, "high"), eq(scans.riskLevel, "critical")), sql`${scans.createdAt} >= ${since}`)),
+    db.select({ disease: scans.disease, count: sql<number>`count(*)` }).from(scans)
+      .innerJoin(profiles, eq(scans.ownerId, profiles.userId))
+      .where(and(eq(profiles.state, state), eq(profiles.district, district), eq(scans.status, "complete"), sql`${scans.disease} IS NOT NULL`, sql`${scans.createdAt} >= ${since}`))
+      .groupBy(scans.disease).orderBy(desc(sql`count(*)`)).limit(5),
+  ]);
+  return {
+    totalScans: Number(totalResult[0]?.count ?? 0),
+    highRiskScans: Number(highRiskResult[0]?.count ?? 0),
+    uniqueFarmers: Number(farmerResult[0]?.count ?? 0),
+    topDiseases: diseaseResult.map(r => ({ disease: r.disease || "Unknown", count: Number(r.count) })),
+  };
+}
+
+export async function getRiskPredictionStats(territory?: AdminTerritory) {
+  const db = await getDb(); if (!db) return { totalPredictions: 0, accurateCount: 0, avgRating: 0, activePredictions: 0 };
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  
+  let territoryFilter: number[] | null = null;
+  if (territory?.state) {
+    const conditions = [eq(profiles.state, territory.state)];
+    if (territory.district) conditions.push(eq(profiles.district, territory.district));
+    const rows = await db.select({ userId: profiles.userId }).from(profiles).where(and(...conditions));
+    territoryFilter = rows.map(r => r.userId);
+    if (territoryFilter.length === 0) return { totalPredictions: 0, accurateCount: 0, avgRating: 0, activePredictions: 0 };
+  }
+  
+  const baseCond = territoryFilter ? sql`${riskPredictions.ownerId} IN (${sql.join(territoryFilter.map(id => sql`${id}`), sql`, `)})` : undefined;
+  
+  const [totalResult, withFeedback, activeResult] = await Promise.all([
+    db.select({ count: sql<number>`count(*)` }).from(riskPredictions).where(baseCond ? and(baseCond, sql`${riskPredictions.createdAt} >= ${thirtyDaysAgo}`) : sql`${riskPredictions.createdAt} >= ${thirtyDaysAgo}`),
+    db.select({ count: sql<number>`count(*)`, avgRating: sql<number>`avg(${riskAlertHistory.feedbackRating})` })
+      .from(riskAlertHistory)
+      .leftJoin(riskPredictions, eq(riskAlertHistory.predictionId, riskPredictions.id))
+      .where(and(baseCond ? baseCond : undefined, sql`${riskAlertHistory.feedbackRating} IS NOT NULL`, sql`${riskAlertHistory.createdAt} >= ${thirtyDaysAgo}`)),
+    db.select({ count: sql<number>`count(*)` }).from(riskPredictions).where(and(baseCond ? baseCond : undefined, eq(riskPredictions.dismissed, false), sql`${riskPredictions.validUntil} > ${new Date()}`)),
+  ]);
+  return {
+    totalPredictions: Number(totalResult[0]?.count ?? 0),
+    accurateCount: Number(withFeedback[0]?.count ?? 0),
+    avgRating: Number(withFeedback[0]?.avgRating ?? 0),
+    activePredictions: Number(activeResult[0]?.count ?? 0),
+  };
+}
+
+export async function getTerritoryRiskData(territory: AdminTerritory) {
+  const db = await getDb(); if (!db) return { predictions: [], outbreaks: [] };
+  // Risk predictions are linked to farmers via ownerId → profiles territory
+  let predictions: (typeof riskPredictions.$inferSelect)[] = [];
+  let outbreakRows: (typeof regionalOutbreaks.$inferSelect)[] = [];
+
+  if (territory?.state) {
+    const conditions = [eq(profiles.state, territory.state)];
+    if (territory.district) conditions.push(eq(profiles.district, territory.district));
+    const farmerIds = (await db.select({ userId: profiles.userId }).from(profiles).where(and(...conditions))).map(r => r.userId);
+    if (farmerIds.length > 0) {
+      predictions = await db.select().from(riskPredictions)
+        .where(and(
+          eq(riskPredictions.dismissed, false),
+          sql`${riskPredictions.validUntil} > ${new Date()}`,
+          sql`${riskPredictions.ownerId} IN (${sql.join(farmerIds.map(id => sql`${id}`), sql`, `)})`
+        ))
+        .orderBy(desc(riskPredictions.riskScore)).limit(20);
+    }
+    // Outbreaks are directly territory-scoped
+    const outbreakConds = [eq(regionalOutbreaks.state, territory.state)];
+    if (territory.district) outbreakConds.push(eq(regionalOutbreaks.district, territory.district));
+    outbreakRows = await db.select().from(regionalOutbreaks)
+      .where(and(...outbreakConds, sql`${regionalOutbreaks.resolvedAt} IS NULL`))
+      .orderBy(desc(regionalOutbreaks.averageRiskScore)).limit(10);
+  } else {
+    // Global admin — show all active
+    predictions = await db.select().from(riskPredictions)
+      .where(and(eq(riskPredictions.dismissed, false), sql`${riskPredictions.validUntil} > ${new Date()}`))
+      .orderBy(desc(riskPredictions.riskScore)).limit(20);
+    outbreakRows = await db.select().from(regionalOutbreaks)
+      .where(sql`${regionalOutbreaks.resolvedAt} IS NULL`)
+      .orderBy(desc(regionalOutbreaks.averageRiskScore)).limit(10);
+  }
+
+  return { predictions, outbreaks: outbreakRows };
 }

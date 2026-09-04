@@ -94,11 +94,8 @@ const FORGE_BASE_URL =
   "https://forge.butterfly-effect.dev";
 const MAPS_PROXY_URL = `${FORGE_BASE_URL}/v1/maps/proxy`;
 
-function loadMapScript(): Promise<void> {
+export function loadMapScript(): Promise<void> {
   if (window.google?.maps) return Promise.resolve();
-  if (!API_KEY) {
-    return Promise.reject(new Error("No Google Maps API Key provided; using integrated vector risk map"));
-  }
   if (window.__cropShieldMapsPromise) return window.__cropShieldMapsPromise;
   const promise = new Promise<void>((resolve, reject) => {
     const existing = document.getElementById("cropshield-google-maps-script") as HTMLScriptElement | null;
@@ -109,7 +106,7 @@ function loadMapScript(): Promise<void> {
     }
     const script = document.createElement("script");
     script.id = "cropshield-google-maps-script";
-    script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY}&v=weekly&libraries=marker,places,geocoding,geometry,visualization`;
+    script.src = `${MAPS_PROXY_URL}/maps/api/js?key=${API_KEY || ""}&v=weekly&libraries=marker,places,geocoding,geometry,visualization`;
     script.async = true;
     script.crossOrigin = "anonymous";
     script.onload = () => resolve();

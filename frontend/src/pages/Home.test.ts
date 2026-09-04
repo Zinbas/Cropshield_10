@@ -13,11 +13,13 @@ describe("CropShield workspace section routing", () => {
     expect(getSection("/farmer/dashboard")).toBe("dashboard");
     expect(getSection("/farmer/crops")).toBe("crops");
     expect(getSection("/farmer/scans")).toBe("scans");
+    expect(getSection("/farmer/history")).toBe("history");
     expect(getSection("/farmer/cases")).toBe("cases");
     expect(getSection("/farmer/experts")).toBe("experts");
     expect(getSection("/farmer/stores")).toBe("stores");
     expect(getSection("/farmer/profile")).toBe("profile");
     expect(getSection("/farmer/risks")).toBe("risks");
+    expect(getSection("/farmer/more")).toBe("more");
   });
 
   it("falls back to the dashboard for unknown paths", () => {
@@ -25,8 +27,8 @@ describe("CropShield workspace section routing", () => {
   });
 
   it("keeps the mobile bar to four destinations plus the centered farmer scan action", () => {
-    expect(getPrimaryMobileSectionIds("farmer")).toEqual(["dashboard", "crops", "scans", "cases"]);
-    expect(getPrimaryMobileSectionIds("admin")).toEqual(["dashboard", "scans", "cases", "farmers"]);
+    expect(getPrimaryMobileSectionIds("farmer")).toEqual(["dashboard", "risks", "history", "more"]);
+    expect(getPrimaryMobileSectionIds("admin")).toEqual(["dashboard", "scans", "cases", "more"]);
   });
 
   it("exposes the configured-owner administrator signup role", () => {

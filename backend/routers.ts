@@ -5,15 +5,17 @@ import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan, updateCase, updateScanProgress } from "./db";
+import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan, updateCase, updateScanProgress, getActiveRiskPredictions, getRiskPredictionHistory, dismissRiskPrediction, insertRiskPrediction, insertAlertHistory, updateAlertFeedback, getActiveOutbreaks, getAllOutbreaks, resolveOutbreak, escalateOutbreak, upsertRegionalOutbreak, getRiskPredictionStats, getTerritoryRiskData } from "./db";
+import { calculateFullRisk, detectRegionalOutbreaks, shouldEscalateToOfficer, type WeatherForecast } from "./riskEngine";
+import { seedTestData } from "./seedTestData";
 import { storagePut } from "./storage";
 import { canCreateLocalAdmin, createLocalSession, hashPassword, LOCAL_SESSION_COOKIE, normalizeLocalEmail, toSafeUser, verifyPassword } from "./localAuth";
 
 type WeatherCurrent = { temperature_2m?: number; relative_humidity_2m?: number; precipitation?: number; wind_speed_10m?: number; weather_code?: number };
-type WeatherPayload = { current: WeatherCurrent; units: Record<string, string>; fetchedAt: string; unavailable?: boolean };
+type WeatherPayload = { current: WeatherCurrent; units: Record<string, string>; daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_sum?: number[]; precipitation_probability_max?: number[] }; fetchedAt: string; unavailable?: boolean };
 
 export async function fetchOpenMeteoWeather(latitude: number, longitude: number, fetcher: typeof fetch = fetch): Promise<WeatherPayload> {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,weather_code&hourly=precipitation_probability&forecast_days=2&timezone=auto`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m,weather_code&hourly=precipitation_probability&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&forecast_days=7&timezone=auto`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
   let response: Response;
@@ -26,13 +28,14 @@ export async function fetchOpenMeteoWeather(latitude: number, longitude: number,
     clearTimeout(timeout);
   }
   if (!response.ok) throw new Error("Weather service unavailable");
-  const json = await response.json() as { current?: WeatherCurrent; current_units?: Record<string, string> };
-  return { current: json.current ?? {}, units: json.current_units ?? {}, fetchedAt: new Date().toISOString() };
+  const json = await response.json() as { current?: WeatherCurrent; current_units?: Record<string, string>; daily?: { temperature_2m_max?: number[]; temperature_2m_min?: number[]; precipitation_sum?: number[]; precipitation_probability_max?: number[] } };
+  return { current: json.current ?? {}, units: json.current_units ?? {}, daily: json.daily, fetchedAt: new Date().toISOString() };
 }
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new Error("Administrator access required");
-  return next();
+  const territory = { state: ctx.user.assignedState ?? null, district: ctx.user.assignedDistrict ?? null };
+  return next({ ctx: { ...ctx, territory } });
 });
 
 const optionalText = (schema: z.ZodString) => z.union([schema, z.literal("")]).optional().transform((value) => value || undefined);
@@ -95,10 +98,15 @@ export const appRouter = router({
   }),
   farmer: router({
     snapshot: protectedProcedure.query(({ ctx }) => getFarmerSnapshot(ctx.user.id)),
+    analytics: protectedProcedure.query(async ({ ctx }) => {
+      const snapshot = await getFarmerSnapshot(ctx.user.id);
+      const profile = snapshot.profile;
+      return getAdminOverview(profile?.state ? { state: profile.state, district: profile.district ?? undefined } : undefined);
+    }),
     crops: protectedProcedure.query(({ ctx }) => getOwnerCrops(ctx.user.id)),
     scans: protectedProcedure.query(({ ctx }) => getOwnerScans(ctx.user.id)),
     verifiedExperts: protectedProcedure.input(z.object({ state: z.string().max(100).optional(), district: z.string().max(100).optional() }).optional()).query(({ input }) => getVerifiedExperts(input)),
-    approvedDrugStores: protectedProcedure.query(() => getApprovedDrugStores()),
+    approvedDrugStores: protectedProcedure.input(z.object({ state: z.string().max(100).optional(), district: z.string().max(100).optional() }).optional()).query(({ input }) => getApprovedDrugStores(input)),
     createCrop: protectedProcedure.input(z.object({ name: z.string().min(2).max(120), cropType: z.string().min(2).max(80), region: z.string().max(160).optional() })).mutation(({ ctx, input }) => createCrop({ ownerId: ctx.user.id, ...input })),
     cases: protectedProcedure.query(({ ctx }) => getOwnerCases(ctx.user.id)),
     updateCase: protectedProcedure.input(z.object({ id: z.number(), reference: z.string().optional(), status: z.enum(["open", "resolved"]).optional() })).mutation(async ({ input }) => { await updateCase(input.id, input); return { success: true }; }),
@@ -120,14 +128,26 @@ export const appRouter = router({
       }
 
       try {
-        const contextSummary = [
+        let weatherContextStr = "";
+        try {
+          const snapshot = await getFarmerSnapshot(ctx.user.id);
+          const profile = snapshot.profile;
+          if (profile?.latitude && profile?.longitude) {
+            const weatherData = await fetchOpenMeteoWeather(Number(profile.latitude), Number(profile.longitude));
+            weatherContextStr = `\nRecent Weather: ${weatherData.current.temperature_2m}°C, ${weatherData.current.relative_humidity_2m}% humidity, ${weatherData.current.precipitation}mm precipitation.`;
+          }
+        } catch (err) {
+          console.warn("[Scan] Could not fetch weather for context:", err);
+        }
+
+        const contextSummary = ([
           input.fieldContext?.soilType && `Soil type: ${input.fieldContext.soilType}`,
           input.fieldContext?.soilPh !== undefined && `Soil pH: ${input.fieldContext.soilPh}`,
           input.fieldContext?.soilMoisture && `Soil moisture: ${input.fieldContext.soilMoisture}`,
           input.fieldContext?.cropCount !== undefined && `Number of crops/plants represented: ${input.fieldContext.cropCount}`,
           input.fieldContext?.landArea !== undefined && `Land area: ${input.fieldContext.landArea} ${input.fieldContext.landUnit ?? "units"}`,
           input.fieldContext?.fieldNotes && `Farmer notes: ${input.fieldContext.fieldNotes}`,
-        ].filter(Boolean).join("\n") || "No optional field context was supplied. Base the result on the image only.";
+        ].filter(Boolean).join("\n") || "No optional field context was supplied. Base the result on the image only.") + weatherContextStr;
         const messages = [
           { role: "system" as const, content: "You are CropShield's crop-health assessment service. Analyze the actual crop image conservatively. Do not claim certainty; return only the requested structured JSON. Use farmer-supplied field context as supporting evidence, explain when image evidence is limited, and make recommendations practical, safe, and specific to the crop and context." },
           { role: "user" as const, content: [{ type: "text" as const, text: `Assess this crop image for visible health concerns. Identify likely crop type, risk level, confidence from 0 to 100, visible symptoms, concise assessment, and practical recommendations. Return treatment, prevention, and monitoring actions where appropriate.\n\nOptional farmer field context (may be incomplete):\n${contextSummary}` }, { type: "image_url" as const, image_url: { url: `data:${input.mimeType};base64,${input.imageBase64.replace(/^data:[^;]+;base64,/, "")}` } }] },
@@ -161,6 +181,9 @@ export const appRouter = router({
         if (!["low", "medium", "high", "critical"].includes(rawRisk)) { rawRisk = "unknown"; }
         const riskLevel = rawRisk as "low" | "medium" | "high" | "critical" | "unknown";
         
+        const rawCropType = parsed.cropType ?? parsed.crop_type;
+        const cropType = typeof rawCropType === "string" ? rawCropType : "Unknown";
+
         const rawDisease = parsed.disease ?? parsed.cropType ?? parsed.crop_type;
         const disease = typeof rawDisease === "string" ? rawDisease : "Unknown";
         
@@ -186,7 +209,7 @@ export const appRouter = router({
           try { await notifyOwner({ title: "High-risk CropShield scan", content: `A new high-risk crop scan was analyzed for farmer ${ctx.user.name ?? ctx.user.id}. Review the approved workflow before system-wide publication.` }); }
           catch (notificationError) { console.warn("[Scan] Notification failed after successful analysis:", notificationError); }
         }
-        return { scanId: scanId ?? 0, imageUrl: stored?.url ?? "", fieldContext: input.fieldContext ?? null, recommendationProgress: recommendations.map((step: string) => ({ step, completed: false })), disease, assessment, symptoms, recommendations, riskLevel, confidence };
+        return { scanId: scanId ?? 0, imageUrl: stored?.url ?? "", fieldContext: input.fieldContext ?? null, recommendationProgress: recommendations.map((step: string) => ({ step, completed: false })), cropType, disease, assessment, symptoms, recommendations, riskLevel, confidence };
       } catch (error) {
         if (scanId) {
           try { await updateScan(scanId, ctx.user.id, { status: "failed" }); }
@@ -200,18 +223,94 @@ export const appRouter = router({
       await updateScan(input.scanId, ctx.user.id, { recommendationProgress: JSON.stringify(input.progress) });
       return { success: true } as const;
     }),
+    reportThreat: protectedProcedure.input(z.object({
+      threatType: z.string().trim().min(2).max(200),
+      riskScore: z.number().int().min(0).max(100),
+      riskLevel: z.enum(["low", "medium", "high", "critical"]),
+      notes: z.string().trim().max(1000).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const snapshot = await getFarmerSnapshot(ctx.user.id);
+      const profile = snapshot.profile;
+      if (profile?.state && profile?.district) {
+        await upsertRegionalOutbreak({
+          state: profile.state,
+          district: profile.district,
+          threatType: input.threatType,
+          reportCount: 1,
+          averageRiskScore: input.riskScore,
+          outbreakLevel: input.riskLevel === "critical" || input.riskLevel === "high" ? "warning" : "watch",
+        });
+      }
+      return { success: true, message: "Thank you for reporting this threat. Your report has been added to the regional outbreak tracker." } as const;
+    }),
   }),
   weather: router({
     current: publicProcedure.input(z.object({ latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) })).query(({ input }) => fetchOpenMeteoWeather(input.latitude, input.longitude)),
   }),
+  risk: router({
+    predict: protectedProcedure.input(z.object({ cropId: z.number().int().positive().optional(), growthStage: z.enum(["seedling", "vegetative", "flowering", "fruiting", "harvest"]).optional() })).mutation(async ({ ctx, input }) => {
+      const snapshot = await getFarmerSnapshot(ctx.user.id);
+      const profile = snapshot.profile;
+      const crop = input.cropId ? snapshot.crops.find(c => c.id === input.cropId) : snapshot.crops[0];
+      const cropType = crop?.cropType ?? profile?.primaryCrop ?? "general crop";
+      const latitude = Number(profile?.latitude ?? 20.5937);
+      const longitude = Number(profile?.longitude ?? 78.9629);
+      const weatherData = await fetchOpenMeteoWeather(latitude, longitude);
+      const weatherForecast: WeatherForecast = { current: weatherData.current, daily: weatherData.daily };
+      const result = await calculateFullRisk(
+        ctx.user.id, crop?.id ?? null, cropType, input.growthStage ?? null,
+        { state: profile?.state, district: profile?.district, region: profile?.region },
+        weatherForecast,
+      );
+      // Store predictions in DB
+      const validUntil = new Date();
+      validUntil.setDate(validUntil.getDate() + 10);
+      for (const threat of result.threats) {
+        const predictionId = await insertRiskPrediction({
+          ownerId: ctx.user.id,
+          cropId: crop?.id ?? null,
+          riskScore: threat.riskScore,
+          riskLevel: threat.riskLevel,
+          threatType: threat.threatType,
+          threatDetails: JSON.stringify({ explanation: threat.explanation, outlook: threat.outlook, preventiveActions: threat.preventiveActions, factors: threat.factors }),
+          weatherSnapshot: JSON.stringify(result.weatherSnapshot),
+          growthStage: input.growthStage ?? null,
+          validUntil,
+        });
+        await insertAlertHistory({ predictionId, ownerId: ctx.user.id, alertType: "in_app" });
+      }
+      // Update regional outbreaks if applicable
+      if (profile?.state && profile?.district) {
+        const outbreaks = await detectRegionalOutbreaks(profile.state, profile.district);
+        for (const ob of outbreaks.outbreaks) {
+          await upsertRegionalOutbreak({
+            state: profile.state, district: profile.district,
+            threatType: ob.threatType, reportCount: ob.reportCount,
+            averageRiskScore: ob.avgScore, outbreakLevel: ob.level,
+          });
+        }
+      }
+      return result;
+    }),
+    active: protectedProcedure.query(({ ctx }) => getActiveRiskPredictions(ctx.user.id)),
+    history: protectedProcedure.query(({ ctx }) => getRiskPredictionHistory(ctx.user.id)),
+    dismiss: protectedProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ ctx, input }) => dismissRiskPrediction(input.id, ctx.user.id)),
+    feedback: protectedProcedure.input(z.object({ predictionId: z.number().int().positive(), rating: z.number().int().min(1).max(5), notes: z.string().max(500).optional(), actionTaken: z.string().max(100).optional() })).mutation(({ ctx, input }) =>
+      updateAlertFeedback(input.predictionId, ctx.user.id, { feedbackRating: input.rating, feedbackNotes: input.notes, actionTaken: input.actionTaken })
+    ),
+    outbreaks: protectedProcedure.input(z.object({ state: z.string().max(100).optional(), district: z.string().max(100).optional() }).optional()).query(({ input }) =>
+      getActiveOutbreaks(input)
+    ),
+    allOutbreaks: protectedProcedure.query(() => getAllOutbreaks()),
+  }),
   admin: router({
-    overview: adminProcedure.query(() => getAdminOverview()),
-    directory: adminProcedure.query(() => getApprovedDirectory()),
-    farmerInsights: adminProcedure.query(() => getAdminFarmerInsights()),
+    overview: adminProcedure.query(({ ctx }) => getAdminOverview(ctx.territory)),
+    directory: adminProcedure.query(({ ctx }) => getApprovedDirectory(ctx.territory)),
+    farmerInsights: adminProcedure.query(({ ctx }) => getAdminFarmerInsights(ctx.territory)),
     setFarmerStatus: adminProcedure.input(z.object({ id: z.number().int().positive(), accountStatus: z.enum(["active", "disabled"]) })).mutation(({ input }) => setFarmerAccountStatus(input.id, input.accountStatus)),
     deleteFarmer: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deleteFarmerAccount(input.id)),
-    locationSummaries: adminProcedure.query(() => getAdminLocationSummaries()),
-    cases: adminProcedure.query(() => getApprovedCases()),
+    locationSummaries: adminProcedure.query(({ ctx }) => getAdminLocationSummaries(ctx.territory)),
+    cases: adminProcedure.query(({ ctx }) => getApprovedCases(ctx.territory)),
     approveScan: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => approveScan(input.id)),
     experts: adminProcedure.query(() => getAdminExperts()),
     createExpert: adminProcedure.input(z.object({ name: z.string().min(2).max(160), phone: z.string().max(40).optional(), email: z.string().email().optional(), qualification: z.string().max(240).optional(), specialization: z.string().max(240).optional(), organization: z.string().max(240).optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), availability: z.string().max(160).optional() })).mutation(({ input }) => createExpert(input)),
@@ -219,6 +318,15 @@ export const appRouter = router({
     drugStores: adminProcedure.query(() => getAdminDrugStores()),
     createDrugStore: adminProcedure.input(z.object({ name: z.string().min(2).max(200), address: z.string().min(4), phone: z.string().max(40).optional(), email: z.string().email().optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), pinCode: z.string().max(12).optional(), licenseInfo: z.string().max(2000).optional(), categories: z.string().max(500).optional(), openingHours: z.string().max(160).optional() })).mutation(({ input }) => createDrugStore(input)),
     setDrugStoreStatus: adminProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["pending", "approved", "rejected", "suspended"]) })).mutation(({ input }) => setDrugStoreStatus(input.id, input.status)),
+    regionalOutbreaks: adminProcedure.query(() => getAllOutbreaks()),
+    riskOverview: adminProcedure.query(({ ctx }) => getRiskPredictionStats(ctx.territory)),
+    territoryRisks: adminProcedure.query(({ ctx }) => getTerritoryRiskData(ctx.territory)),
+    escalateOutbreak: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => escalateOutbreak(input.id)),
+    resolveOutbreak: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => resolveOutbreak(input.id)),
+    seedTestData: adminProcedure.mutation(async () => {
+      const result = await seedTestData();
+      return { success: true, message: `Seeded ${result.farmers} farmers, ${result.scans} scans, ${result.predictions} predictions, ${result.outbreaks} outbreaks, ${result.experts} experts, ${result.stores} stores.`, ...result };
+    }),
   }),
   cases: router({
     create: protectedProcedure.input(z.object({ scanId: z.number().int().positive(), reference: z.string().min(3).max(32), notes: z.string().max(2000).optional() })).mutation(({ ctx, input }) => createCase({ ownerId: ctx.user.id, scanId: input.scanId, reference: input.reference, notes: input.notes })),

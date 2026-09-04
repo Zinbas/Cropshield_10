@@ -20,6 +20,8 @@ export const users = pgTable("users", {
   passwordHash: varchar("passwordHash", { length: 255 }),
   role: roleEnum("role").default("user").notNull(),
   accountStatus: accountStatusEnum("accountStatus").default("active").notNull(),
+  assignedState: varchar("assignedState", { length: 100 }),
+  assignedDistrict: varchar("assignedDistrict", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),
@@ -156,6 +158,57 @@ export const weatherCache = pgTable("weatherCache", {
   expiresAt: timestamp("expiresAt").notNull(),
 });
 
+export const alertTypeEnum = pgEnum("alertType", ["push", "in_app", "sms"]);
+export const outbreakLevelEnum = pgEnum("outbreakLevel", ["watch", "warning", "outbreak"]);
+export const growthStageEnum = pgEnum("growthStage", ["seedling", "vegetative", "flowering", "fruiting", "harvest"]);
+
+export const riskPredictions = pgTable("riskPredictions", {
+  id: serial("id").primaryKey(),
+  ownerId: integer("ownerId").notNull(),
+  cropId: integer("cropId"),
+  riskScore: integer("riskScore").notNull().default(0),
+  riskLevel: riskLevelEnum("riskLevel").default("unknown").notNull(),
+  threatType: varchar("threatType", { length: 200 }).notNull(),
+  threatDetails: text("threatDetails"),
+  weatherSnapshot: text("weatherSnapshot"),
+  growthStage: growthStageEnum("growthStage"),
+  validUntil: timestamp("validUntil").notNull(),
+  dismissed: boolean("dismissed").default(false).notNull(),
+  triggeredScanId: integer("triggeredScanId"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const riskAlertHistory = pgTable("riskAlertHistory", {
+  id: serial("id").primaryKey(),
+  predictionId: integer("predictionId").notNull(),
+  ownerId: integer("ownerId").notNull(),
+  alertType: alertTypeEnum("alertType").default("in_app").notNull(),
+  readAt: timestamp("readAt"),
+  actionTaken: varchar("actionTaken", { length: 100 }),
+  feedbackRating: integer("feedbackRating"),
+  feedbackNotes: text("feedbackNotes"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export const regionalOutbreaks = pgTable("regionalOutbreaks", {
+  id: serial("id").primaryKey(),
+  state: varchar("state", { length: 100 }).notNull(),
+  district: varchar("district", { length: 100 }).notNull(),
+  threatType: varchar("threatType", { length: 200 }).notNull(),
+  reportCount: integer("reportCount").default(1).notNull(),
+  averageRiskScore: integer("averageRiskScore").default(0).notNull(),
+  outbreakLevel: outbreakLevelEnum("outbreakLevel").default("watch").notNull(),
+  affectedCropTypes: text("affectedCropTypes"),
+  startedAt: timestamp("startedAt").defaultNow().notNull(),
+  resolvedAt: timestamp("resolvedAt"),
+  officerNotified: boolean("officerNotified").default(false).notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().notNull(),
+});
+
 export type Expert = typeof experts.$inferSelect;
 export type DrugStore = typeof drugStores.$inferSelect;
 export type WeatherCache = typeof weatherCache.$inferSelect;
+export type RiskPrediction = typeof riskPredictions.$inferSelect;
+export type RiskAlertHistory = typeof riskAlertHistory.$inferSelect;
+export type RegionalOutbreak = typeof regionalOutbreaks.$inferSelect;

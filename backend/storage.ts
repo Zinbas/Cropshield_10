@@ -96,7 +96,9 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 }
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
-  const { forgeUrl, forgeKey } = getForgeConfig();
+  const config = getForgeConfig();
+  if (!config) throw new Error("Forge config missing");
+  const { forgeUrl, forgeKey } = config;
   const key = normalizeKey(relKey);
 
   const getUrl = new URL("v1/storage/presign/get", forgeUrl + "/");
