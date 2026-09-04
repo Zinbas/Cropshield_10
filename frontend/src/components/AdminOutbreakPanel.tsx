@@ -26,12 +26,20 @@ export function AdminOutbreakPanel() {
   const [showResolved, setShowResolved] = useState(false);
 
   const escalateMutation = trpc.admin.escalateOutbreak.useMutation({
-    onSuccess: () => { utils.admin.regionalOutbreaks.invalidate(); toast.success("Officer notified"); },
+    onSuccess: () => { 
+      utils.admin.regionalOutbreaks.invalidate(); 
+      utils.risk.allOutbreaks.invalidate();
+      toast.success("Officer notified"); 
+    },
     onError: () => toast.error("Failed to escalate"),
   });
 
   const resolveMutation = trpc.admin.resolveOutbreak.useMutation({
-    onSuccess: () => { utils.admin.regionalOutbreaks.invalidate(); toast.success("Outbreak resolved"); },
+    onSuccess: () => { 
+      utils.admin.regionalOutbreaks.invalidate(); 
+      utils.risk.allOutbreaks.invalidate();
+      toast.success("Outbreak resolved"); 
+    },
     onError: () => toast.error("Failed to resolve"),
   });
 
@@ -40,6 +48,7 @@ export function AdminOutbreakPanel() {
       utils.admin.regionalOutbreaks.invalidate();
       utils.admin.riskOverview.invalidate();
       utils.admin.overview.invalidate();
+      utils.risk.allOutbreaks.invalidate();
       toast.success(data.message);
     },
     onError: (err) => toast.error(err.message || "Seeding failed"),

@@ -1,6 +1,7 @@
-/// <reference types="@types/google.maps" />
-
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { MapContainer, TileLayer, CircleMarker, Marker, useMap, Tooltip } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import {
   AlertTriangle,
   ChevronRight,
@@ -76,6 +77,20 @@ const DEFAULT_REGIONAL_ZONES: RiskZonePoint[] = [
     temperature: 24,
     humidity: 88,
     advisory: "Apply prophylactic fungicidal spray on wheat borders. Inspect lower leaves for yellow pustules.",
+    riskLevel: "high",
+  },
+  {
+    id: "zone-assam",
+    location: "Assam · Guwahati",
+    position: { lat: 26.1445, lng: 91.7362 },
+    scans: 12,
+    highRisk: 5,
+    farmers: 18,
+    threatName: "Tea Mosquito Bug & Blister Blight",
+    primaryCrop: "Tea & Rice",
+    temperature: 27,
+    humidity: 92,
+    advisory: "Monitor shaded areas. Pluck infected tea leaves and spray appropriate copper fungicides.",
     riskLevel: "high",
   },
   {
@@ -164,7 +179,48 @@ function riskFillColor(level: "high" | "moderate" | "low") {
     : "rgba(16,185,129,0.14)";
 }
 
-import { loadMapScript } from "./Map";
+
+
+const myFarmIcon = L.divIcon({
+  html: `
+    <div style="
+      background: #065f46; color: white; font-size: 10px; font-weight: 700;
+      padding: 4px 8px; border-radius: 20px; white-space: nowrap;
+      border: 2px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      display: flex; align-items: center; gap: 4px;
+      transform: translate(-50%, -100%);
+    ">
+      <span style="font-size:13px;">📍</span> My Farm
+    </div>`,
+  className: "",
+  iconSize: [0, 0],
+  iconAnchor: [0, 0],
+});
+
+function MapController({
+  center,
+  zoom,
+  selectedPoint,
+}: {
+  center: { lat: number; lng: number };
+  zoom: number;
+  selectedPoint: RiskZonePoint | null;
+}) {
+  const map = useMap();
+  useEffect(() => {
+    if (selectedPoint) {
+      map.flyTo(selectedPoint.position, 10, { duration: 0.8 });
+    }
+  }, [selectedPoint, map]);
+
+  useEffect(() => {
+    if (!selectedPoint) {
+      map.flyTo(center, zoom, { duration: 0.8 });
+    }
+  }, [center, zoom, selectedPoint, map]);
+
+  return null;
+}
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
@@ -182,99 +238,11 @@ export function InteractiveRiskMap({
   showHeatmap = true,
   showMapTypeControl = true,
 }: InteractiveRiskMapProps) {
-  const [useFallback, setUseFallback] = useState(false);
-  const [mapsReady, setMapsReady] = useState(false);
-
-  // Attempt to load Google Maps on mount
-  useEffect(() => {
-    loadMapScript()
-      .then(() => setMapsReady(true))
-      .catch(() => setUseFallback(true));
-  }, []);
-
-  if (useFallback) {
-    return (
-      <FallbackSVGMap
-        points={points}
-        initialCenter={initialCenter}
-        className={className}
-        expanded={expanded}
-        onToggleExpand={onToggleExpand}
-        onSelectPoint={onSelectPoint}
-        title={title}
-        compact={compact}
-      />
-    );
-  }
-
-  if (!mapsReady) {
-    return (
-      <div
-        className={cn(
-          "relative w-full rounded-2xl overflow-hidden border shadow-md flex items-center justify-center",
-          "bg-gradient-to-br from-[#e8f5ee] via-[#dceee4] to-[#d0e8d6] border-emerald-200/60",
-          expanded ? "fixed inset-0 z-50 rounded-none h-screen w-screen" : compact ? "h-[240px]" : "h-[380px] sm:h-[440px]",
-          className
-        )}
-      >
-        <div className="flex flex-col items-center gap-2 text-emerald-700">
-          <span className="relative flex h-4 w-4">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
-            <span className="relative inline-flex rounded-full h-4 w-4 bg-emerald-600" />
-          </span>
-          <span className="text-xs font-semibold">Loading live map…</span>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <GoogleRiskMap
-      points={points}
-      myLocation={myLocation}
-      initialCenter={initialCenter}
-      initialZoom={initialZoom}
-      className={className}
-      expanded={expanded}
-      onToggleExpand={onToggleExpand}
-      onSelectPoint={onSelectPoint}
-      title={title}
-      compact={compact}
-      showHeatmap={showHeatmap}
-      showMapTypeControl={showMapTypeControl}
-    />
-  );
-}
-
-// ─── Google Maps Implementation ───────────────────────────────────────────────
-
-function GoogleRiskMap({
-  points,
-  myLocation,
-  initialCenter,
-  initialZoom,
-  className,
-  expanded = false,
-  onToggleExpand,
-  onSelectPoint,
-  title,
-  compact = false,
-  showHeatmap = true,
-  showMapTypeControl = true,
-}: InteractiveRiskMapProps) {
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const circlesRef = useRef<google.maps.Circle[]>([]);
-  const myMarkerRef = useRef<google.maps.marker.AdvancedMarkerElement | null>(null);
-  const heatmapRef = useRef<google.maps.visualization.HeatmapLayer | null>(null);
-  const listenersRef = useRef<google.maps.MapsEventListener[]>([]);
-
-  const [selectedPoint, setSelectedPoint] = useState<RiskZonePoint | null>(null);
   const [filter, setFilter] = useState<"all" | "high" | "moderate" | "low">("all");
+  const [selectedPoint, setSelectedPoint] = useState<RiskZonePoint | null>(null);
   const [mapType, setMapType] = useState<"roadmap" | "satellite">("roadmap");
-  const [heatmapOn, setHeatmapOn] = useState(showHeatmap);
+  const [heatmapOn, setHeatmapOn] = useState(true);
 
-  // Derive display points (real data > fallback demo data)
   const displayPoints = useMemo<RiskZonePoint[]>(() => {
     const raw = points && points.length > 0 ? points : DEFAULT_REGIONAL_ZONES;
     return raw.map((pt, idx) => {
@@ -290,192 +258,8 @@ function GoogleRiskMap({
     [displayPoints, filter]
   );
 
-  const defaultCenter = useMemo(() => {
-    if (initialCenter) return initialCenter;
-    if (myLocation) return myLocation;
-    return { lat: 20.5937, lng: 78.9629 }; // India fallback
-  }, [initialCenter, myLocation]);
-
-  const defaultZoom = initialZoom ?? (compact ? 5 : myLocation ? 7 : 5);
-
-  // ── Initialize map once ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-    mapRef.current = new window.google!.maps.Map(mapContainerRef.current, {
-      center: defaultCenter,
-      zoom: defaultZoom,
-      mapTypeId: google.maps.MapTypeId.ROADMAP,
-      mapTypeControl: false,
-      fullscreenControl: false,
-      zoomControl: false,
-      streetViewControl: false,
-      mapId: "DEMO_MAP_ID",
-      gestureHandling: "greedy",
-      styles: [
-        { featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] },
-        { featureType: "transit", stylers: [{ visibility: "off" }] },
-      ],
-    });
-
-    // Initialise heatmap layer
-    heatmapRef.current = new google.maps.visualization.HeatmapLayer({
-      map: showHeatmap ? mapRef.current : null,
-      radius: compact ? 30 : 50,
-      opacity: 0.7,
-    });
-
-    return () => {
-      // Cleanup on unmount
-      clearCircles();
-      clearMyMarker();
-      clearHeatmap();
-      listenersRef.current.forEach((l) => google.maps.event.removeListener(l));
-      listenersRef.current = [];
-      mapRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // only once
-
-  // ── Handle expanded resize ──────────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapRef.current) return;
-    window.setTimeout(() => {
-      if (mapRef.current) google.maps.event.trigger(mapRef.current, "resize");
-    }, 100);
-  }, [expanded]);
-
-  // ── Map type sync ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapRef.current) return;
-    mapRef.current.setMapTypeId(
-      mapType === "satellite" ? google.maps.MapTypeId.HYBRID : google.maps.MapTypeId.ROADMAP
-    );
-  }, [mapType]);
-
-  // ── Heatmap toggle ───────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!heatmapRef.current || !mapRef.current) return;
-    heatmapRef.current.setMap(heatmapOn ? mapRef.current : null);
-  }, [heatmapOn]);
-
-  // ── Update heatmap data when points change ───────────────────────────────────
-  useEffect(() => {
-    if (!heatmapRef.current) return;
-    const weighted = displayPoints.map((pt) => ({
-      location: new google.maps.LatLng(pt.position.lat, pt.position.lng),
-      weight: Math.max(1, pt.highRisk * 3 + (pt.scans - pt.highRisk)),
-    }));
-    heatmapRef.current.setData(weighted);
-  }, [displayPoints]);
-
-  // ── Draw/redraw circles when filteredPoints or selection changes ─────────────
-  const clearCircles = useCallback(() => {
-    circlesRef.current.forEach((c) => c.setMap(null));
-    circlesRef.current = [];
-    listenersRef.current.forEach((l) => google.maps.event.removeListener(l));
-    listenersRef.current = [];
-  }, []);
-
-  const clearMyMarker = useCallback(() => {
-    if (myMarkerRef.current) {
-      myMarkerRef.current.map = null;
-      myMarkerRef.current = null;
-    }
-  }, []);
-
-  const clearHeatmap = useCallback(() => {
-    if (heatmapRef.current) {
-      heatmapRef.current.setMap(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!mapRef.current) return;
-    clearCircles();
-
-    filteredPoints.forEach((pt) => {
-      if (!mapRef.current) return;
-      const isSelected = selectedPoint?.id === pt.id;
-      const color = riskColor(pt.riskLevel ?? "low");
-      const fill = riskFillColor(pt.riskLevel ?? "low");
-      const baseRadius = Math.max(18000, Math.min(45000, (pt.scans || 1) * 2500 + 15000));
-
-      // Outer halo ring
-      const outerCircle = new google.maps.Circle({
-        map: mapRef.current,
-        center: pt.position,
-        radius: baseRadius * 1.5,
-        strokeColor: color,
-        strokeOpacity: 0.25,
-        strokeWeight: 1.5,
-        fillColor: fill,
-        fillOpacity: 0.08,
-        clickable: false,
-        zIndex: 1,
-      });
-
-      // Main filled zone circle
-      const mainCircle = new google.maps.Circle({
-        map: mapRef.current,
-        center: pt.position,
-        radius: baseRadius,
-        strokeColor: color,
-        strokeOpacity: isSelected ? 1 : 0.7,
-        strokeWeight: isSelected ? 3 : 2,
-        fillColor: fill,
-        fillOpacity: isSelected ? 0.4 : 0.25,
-        clickable: true,
-        zIndex: 2,
-      });
-
-      const listener = google.maps.event.addListener(mainCircle, "click", () => {
-        setSelectedPoint(pt);
-        onSelectPoint?.(pt);
-        // Pan to the clicked point
-        mapRef.current?.panTo(pt.position);
-      });
-
-      listenersRef.current.push(listener);
-      circlesRef.current.push(outerCircle, mainCircle);
-    });
-  }, [filteredPoints, selectedPoint, clearCircles, onSelectPoint]);
-
-  // ── Draw "My Farm" marker ────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!mapRef.current) return;
-    clearMyMarker();
-    const loc = myLocation ?? (points && points.find((p) => p.isMyLocation)?.position);
-    if (!loc) return;
-
-    const pin = document.createElement("div");
-    pin.innerHTML = `
-      <div style="
-        background: #065f46; color: white; font-size: 10px; font-weight: 700;
-        padding: 4px 8px; border-radius: 20px; white-space: nowrap;
-        border: 2px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        display: flex; align-items: center; gap: 4px;
-      ">
-        <span style="font-size:13px;">📍</span> My Farm
-      </div>`;
-
-    myMarkerRef.current = new google.maps.marker.AdvancedMarkerElement({
-      map: mapRef.current,
-      position: loc,
-      title: "My Farm",
-      content: pin,
-      zIndex: 10,
-    });
-  }, [myLocation, points, clearMyMarker]);
-
-  // ── Controls ─────────────────────────────────────────────────────────────────
-  const handleZoomIn = () => mapRef.current?.setZoom((mapRef.current.getZoom() ?? 5) + 1);
-  const handleZoomOut = () => mapRef.current?.setZoom(Math.max(3, (mapRef.current.getZoom() ?? 5) - 1));
-  const handleReset = () => {
-    mapRef.current?.setCenter(defaultCenter);
-    mapRef.current?.setZoom(defaultZoom);
-    setSelectedPoint(null);
-    onSelectPoint?.(null);
-  };
+  const defaultCenter = initialCenter ?? { lat: 22.0, lng: 79.0 }; // Center of India roughly
+  const defaultZoom = initialZoom ?? (compact ? 3 : 5);
 
   const highCount = displayPoints.filter((p) => p.riskLevel === "high").length;
   const modCount = displayPoints.filter((p) => p.riskLevel === "moderate").length;
@@ -490,12 +274,60 @@ function GoogleRiskMap({
         className
       )}
     >
-      {/* ── Google Map Canvas ── */}
-      <div ref={mapContainerRef} className="w-full h-full" />
+      <MapContainer
+        center={defaultCenter}
+        zoom={defaultZoom}
+        className="w-full h-full z-0"
+        zoomControl={false}
+        attributionControl={false}
+      >
+        <MapController center={defaultCenter} zoom={defaultZoom} selectedPoint={selectedPoint} />
+        {mapType === "satellite" ? (
+          <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
+        ) : (
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png" />
+        )}
+
+        {filteredPoints.map((pt) => {
+          const color = riskColor(pt.riskLevel ?? "low");
+          const fill = riskFillColor(pt.riskLevel ?? "low");
+          const isSelected = selectedPoint?.id === pt.id;
+          const baseRadius = Math.max(15, Math.min(30, (pt.scans || 1) * 1.5 + 10));
+
+          return (
+            <CircleMarker
+              key={pt.id}
+              center={pt.position}
+              radius={baseRadius}
+              pathOptions={{
+                color: color,
+                fillColor: color,
+                fillOpacity: isSelected ? 0.4 : 0.25,
+                weight: isSelected ? 3 : 2,
+                opacity: isSelected ? 1 : 0.7,
+              }}
+              eventHandlers={{
+                click: () => {
+                  setSelectedPoint(pt);
+                  onSelectPoint?.(pt);
+                },
+              }}
+            >
+              {heatmapOn && (
+                <Tooltip direction="top" offset={[0, -10]} opacity={1}>
+                  <div className="text-xs font-bold">{pt.location.split(" · ").pop() || pt.location}</div>
+                  <div className="text-[10px] text-gray-500">Scans: {pt.scans} | High Risk: {pt.highRisk}</div>
+                </Tooltip>
+              )}
+            </CircleMarker>
+          );
+        })}
+
+        {myLocation && <Marker position={myLocation} icon={myFarmIcon} />}
+      </MapContainer>
 
       {/* ── Top Toolbar ── */}
       <div className="absolute top-3 left-3 right-3 z-20 flex items-center justify-between gap-2 pointer-events-none">
-        {/* Title badge */}
         <div className="pointer-events-auto bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full border border-emerald-200 shadow-sm flex items-center gap-2 max-w-[55%] truncate">
           <span className="relative flex h-2.5 w-2.5 shrink-0">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-500 opacity-75" />
@@ -506,9 +338,7 @@ function GoogleRiskMap({
           </span>
         </div>
 
-        {/* Map type + controls group */}
         <div className="pointer-events-auto flex items-center gap-1.5">
-          {/* Normal / Satellite toggle */}
           {showMapTypeControl && (
             <div className="flex bg-white/90 backdrop-blur-md rounded-xl border border-emerald-200 shadow-sm overflow-hidden">
               <button
@@ -516,12 +346,8 @@ function GoogleRiskMap({
                 onClick={() => setMapType("roadmap")}
                 className={cn(
                   "flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold transition-all",
-                  mapType === "roadmap"
-                    ? "bg-emerald-700 text-white"
-                    : "text-emerald-800 hover:bg-emerald-50"
+                  mapType === "roadmap" ? "bg-emerald-700 text-white" : "text-emerald-800 hover:bg-emerald-50"
                 )}
-                title="Normal map"
-                aria-label="Normal map"
               >
                 <MapIcon size={11} />
                 <span className="hidden sm:inline">Normal</span>
@@ -531,45 +357,20 @@ function GoogleRiskMap({
                 onClick={() => setMapType("satellite")}
                 className={cn(
                   "flex items-center gap-1 px-2 py-1.5 text-[10px] font-bold transition-all",
-                  mapType === "satellite"
-                    ? "bg-emerald-700 text-white"
-                    : "text-emerald-800 hover:bg-emerald-50"
+                  mapType === "satellite" ? "bg-emerald-700 text-white" : "text-emerald-800 hover:bg-emerald-50"
                 )}
-                title="Satellite view"
-                aria-label="Satellite view"
               >
                 <Satellite size={11} />
                 <span className="hidden sm:inline">Satellite</span>
               </button>
             </div>
           )}
-
-          {/* Zoom / Reset / Fullscreen controls */}
           <div className="flex items-center gap-1 bg-white/90 backdrop-blur-md p-1 rounded-xl border border-emerald-200 shadow-sm">
             <button
               type="button"
-              onClick={handleZoomIn}
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 transition-all"
-              title="Zoom in"
-              aria-label="Zoom in"
-            >
-              <Plus size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={handleZoomOut}
-              className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 transition-all"
-              title="Zoom out"
-              aria-label="Zoom out"
-            >
-              <Minus size={14} />
-            </button>
-            <button
-              type="button"
-              onClick={handleReset}
+              onClick={() => { setSelectedPoint(null); onSelectPoint?.(null); }}
               className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-50 hover:bg-emerald-100 active:scale-95 text-emerald-800 transition-all"
               title="Reset view"
-              aria-label="Reset view"
             >
               <RotateCcw size={13} />
             </button>
@@ -579,7 +380,6 @@ function GoogleRiskMap({
                 onClick={onToggleExpand}
                 className="w-7 h-7 flex items-center justify-center rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition-all active:scale-95"
                 title={expanded ? "Close full screen" : "Full screen map"}
-                aria-label="Toggle full screen"
               >
                 {expanded ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
               </button>
@@ -588,73 +388,37 @@ function GoogleRiskMap({
         </div>
       </div>
 
-      {/* ── Filter Chips (not shown in compact mode) ── */}
+      {/* ── Filter Chips ── */}
       {!compact && (
         <div className="absolute top-12 left-3 z-20 flex flex-wrap gap-1.5 pointer-events-auto">
           {(["all", "high", "moderate", "low"] as const).map((lvl) => {
-            const label =
-              lvl === "all"
-                ? `All (${displayPoints.length})`
-                : lvl === "high"
-                ? `High (${highCount})`
-                : lvl === "moderate"
-                ? `Moderate (${modCount})`
-                : `Routine (${lowCount})`;
+            const label = lvl === "all" ? `All (${displayPoints.length})` : lvl === "high" ? `High (${highCount})` : lvl === "moderate" ? `Moderate (${modCount})` : `Routine (${lowCount})`;
             const active = filter === lvl;
             const color =
-              lvl === "all"
-                ? active
-                  ? "bg-emerald-800 text-white border-emerald-700"
-                  : "bg-white/80 text-emerald-900 border-emerald-200 hover:border-emerald-400"
-                : lvl === "high"
-                ? active
-                  ? "bg-red-600 text-white border-red-500"
-                  : "bg-white/80 text-red-700 border-red-200 hover:border-red-400"
-                : lvl === "moderate"
-                ? active
-                  ? "bg-amber-600 text-white border-amber-500"
-                  : "bg-white/80 text-amber-800 border-amber-200 hover:border-amber-400"
-                : active
-                ? "bg-emerald-600 text-white border-emerald-500"
-                : "bg-white/80 text-emerald-800 border-emerald-200 hover:border-emerald-400";
+              lvl === "all" ? (active ? "bg-emerald-800 text-white border-emerald-700" : "bg-white/80 text-emerald-900 border-emerald-200 hover:border-emerald-400")
+                : lvl === "high" ? (active ? "bg-red-600 text-white border-red-500" : "bg-white/80 text-red-700 border-red-200 hover:border-red-400")
+                : lvl === "moderate" ? (active ? "bg-amber-600 text-white border-amber-500" : "bg-white/80 text-amber-800 border-amber-200 hover:border-amber-400")
+                : (active ? "bg-emerald-600 text-white border-emerald-500" : "bg-white/80 text-emerald-800 border-emerald-200 hover:border-emerald-400");
 
             return (
               <button
                 key={lvl}
                 type="button"
                 onClick={() => setFilter(lvl)}
-                className={cn(
-                  "text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all cursor-pointer backdrop-blur-md shadow-sm flex items-center gap-1",
-                  color
-                )}
+                className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all cursor-pointer backdrop-blur-md shadow-sm flex items-center gap-1", color)}
               >
-                {lvl !== "all" && (
-                  <span
-                    className={cn(
-                      "w-1.5 h-1.5 rounded-full inline-block",
-                      lvl === "high" ? "bg-red-500" : lvl === "moderate" ? "bg-amber-500" : "bg-emerald-500"
-                    )}
-                  />
-                )}
+                {lvl !== "all" && <span className={cn("w-1.5 h-1.5 rounded-full inline-block", lvl === "high" ? "bg-red-500" : lvl === "moderate" ? "bg-amber-500" : "bg-emerald-500")} />}
                 {label}
               </button>
             );
           })}
-
-          {/* Heatmap toggle */}
           {showHeatmap && (
             <button
               type="button"
               onClick={() => setHeatmapOn((v) => !v)}
-              className={cn(
-                "text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all cursor-pointer backdrop-blur-md shadow-sm flex items-center gap-1",
-                heatmapOn
-                  ? "bg-orange-600 text-white border-orange-500"
-                  : "bg-white/80 text-orange-800 border-orange-200 hover:border-orange-400"
-              )}
+              className={cn("text-[10px] font-bold px-2.5 py-1 rounded-full border transition-all cursor-pointer backdrop-blur-md shadow-sm flex items-center gap-1", heatmapOn ? "bg-orange-600 text-white border-orange-500" : "bg-white/80 text-orange-800 border-orange-200 hover:border-orange-400")}
             >
-              <Layers size={10} />
-              Heatmap
+              <Layers size={10} /> Heatmap
             </button>
           )}
         </div>
@@ -666,100 +430,41 @@ function GoogleRiskMap({
           <div className="flex items-start justify-between gap-2 border-b border-gray-100 pb-2.5">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span
-                  className={cn(
-                    "text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full tracking-wider text-white",
-                    selectedPoint.riskLevel === "high"
-                      ? "bg-red-600"
-                      : selectedPoint.riskLevel === "moderate"
-                      ? "bg-amber-600"
-                      : "bg-emerald-600"
-                  )}
-                >
+                <span className={cn("text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full tracking-wider text-white", selectedPoint.riskLevel === "high" ? "bg-red-600" : selectedPoint.riskLevel === "moderate" ? "bg-amber-600" : "bg-emerald-600")}>
                   {selectedPoint.riskLevel} Risk Zone
                 </span>
               </div>
               <h4 className="text-sm font-bold text-gray-900 mt-1 leading-snug flex items-center gap-1 truncate">
-                <MapPin size={13} className="text-emerald-600 shrink-0" />
-                {selectedPoint.location}
+                <MapPin size={13} className="text-emerald-600 shrink-0" /> {selectedPoint.location}
               </h4>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedPoint(null);
-                onSelectPoint?.(null);
-              }}
-              className="text-gray-400 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors shrink-0"
-              aria-label="Close details"
-            >
-              ✕
-            </button>
+            <button type="button" onClick={() => { setSelectedPoint(null); onSelectPoint?.(null); }} className="text-gray-400 hover:text-gray-700 p-1 rounded-lg hover:bg-gray-100 transition-colors shrink-0">✕</button>
           </div>
-
           <div className="py-2.5 space-y-2 text-xs text-gray-700">
             {selectedPoint.threatName && (
               <div className="flex items-start gap-2 bg-amber-50 p-2 rounded-xl border border-amber-100">
                 <AlertTriangle size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <b className="text-amber-800 block text-[11px]">Flagged Threat:</b>
-                  <span className="text-[11px] text-gray-700">{selectedPoint.threatName}</span>
-                </div>
+                <div><b className="text-amber-800 block text-[11px]">Flagged Threat:</b><span className="text-[11px] text-gray-700">{selectedPoint.threatName}</span></div>
               </div>
             )}
-
             <div className="grid grid-cols-3 gap-1.5 text-center">
-              <div className="bg-red-50 p-1.5 rounded-lg">
-                <span className="text-[9px] text-gray-500 block">High Risk</span>
-                <b className="text-red-600 text-xs font-extrabold">{selectedPoint.highRisk}</b>
-              </div>
-              <div className="bg-emerald-50 p-1.5 rounded-lg">
-                <span className="text-[9px] text-gray-500 block">Total Scans</span>
-                <b className="text-emerald-700 text-xs font-extrabold">{selectedPoint.scans}</b>
-              </div>
-              <div className="bg-gray-50 p-1.5 rounded-lg">
-                <span className="text-[9px] text-gray-500 block">Farms</span>
-                <b className="text-gray-900 text-xs font-extrabold">{selectedPoint.farmers ?? "—"}</b>
-              </div>
+              <div className="bg-red-50 p-1.5 rounded-lg"><span className="text-[9px] text-gray-500 block">High Risk</span><b className="text-red-600 text-xs font-extrabold">{selectedPoint.highRisk}</b></div>
+              <div className="bg-emerald-50 p-1.5 rounded-lg"><span className="text-[9px] text-gray-500 block">Total Scans</span><b className="text-emerald-700 text-xs font-extrabold">{selectedPoint.scans}</b></div>
+              <div className="bg-gray-50 p-1.5 rounded-lg"><span className="text-[9px] text-gray-500 block">Farms</span><b className="text-gray-900 text-xs font-extrabold">{selectedPoint.farmers ?? "—"}</b></div>
             </div>
-
             {(selectedPoint.temperature != null || selectedPoint.humidity != null) && (
               <div className="flex items-center gap-3 text-[10px] text-gray-500 px-1">
-                {selectedPoint.temperature != null && (
-                  <span className="flex items-center gap-1">
-                    <Thermometer size={12} className="text-orange-500" />
-                    {selectedPoint.temperature}°C
-                  </span>
-                )}
-                {selectedPoint.humidity != null && (
-                  <span className="flex items-center gap-1">
-                    <Droplets size={12} className="text-cyan-600" />
-                    {selectedPoint.humidity}% Humidity
-                  </span>
-                )}
-                {selectedPoint.primaryCrop && (
-                  <span className="flex items-center gap-1 truncate">
-                    <Sprout size={12} className="text-emerald-600" />
-                    {selectedPoint.primaryCrop}
-                  </span>
-                )}
+                {selectedPoint.temperature != null && <span className="flex items-center gap-1"><Thermometer size={12} className="text-orange-500" />{selectedPoint.temperature}°C</span>}
+                {selectedPoint.humidity != null && <span className="flex items-center gap-1"><Droplets size={12} className="text-cyan-600" />{selectedPoint.humidity}% Humidity</span>}
+                {selectedPoint.primaryCrop && <span className="flex items-center gap-1 truncate"><Sprout size={12} className="text-emerald-600" />{selectedPoint.primaryCrop}</span>}
               </div>
             )}
-
             {selectedPoint.advisory && (
-              <p className="text-[10px] text-emerald-800 bg-emerald-50 p-2 rounded-lg border border-emerald-100 line-clamp-3 leading-relaxed">
-                💡 {selectedPoint.advisory}
-              </p>
+              <p className="text-[10px] text-emerald-800 bg-emerald-50 p-2 rounded-lg border border-emerald-100 line-clamp-3 leading-relaxed">💡 {selectedPoint.advisory}</p>
             )}
           </div>
-
-          <button
-            type="button"
-            onClick={() => onSelectPoint?.(selectedPoint)}
-            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1 shadow-lg cursor-pointer"
-          >
-            <span>Focus this regional threat</span>
-            <ChevronRight size={14} />
+          <button type="button" onClick={() => onSelectPoint?.(selectedPoint)} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2 px-3 rounded-xl transition-all flex items-center justify-center gap-1 shadow-lg cursor-pointer">
+            <span>Focus this regional threat</span><ChevronRight size={14} />
           </button>
         </div>
       )}
@@ -767,28 +472,17 @@ function GoogleRiskMap({
       {/* ── Map Legend ── */}
       {!compact && (
         <div className="absolute bottom-3 left-3 z-20 pointer-events-none hidden sm:flex items-center gap-3 bg-white/90 backdrop-blur-md px-3 py-2 rounded-xl border border-emerald-200 shadow-sm">
-          <span className="flex items-center gap-1 text-[9px] font-bold text-red-700">
-            <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> High Risk
-          </span>
-          <span className="flex items-center gap-1 text-[9px] font-bold text-amber-700">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" /> Moderate
-          </span>
-          <span className="flex items-center gap-1 text-[9px] font-bold text-emerald-700">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> Monitoring
-          </span>
-          {showHeatmap && heatmapOn && (
-            <span className="flex items-center gap-1 text-[9px] font-bold text-orange-700">
-              <Layers size={10} className="text-orange-500" /> Heatmap
-            </span>
-          )}
-          <span className="flex items-center gap-1 text-[9px] text-gray-500">
-            <ShieldCheck size={11} className="text-emerald-600" /> Click zone for details
-          </span>
+          <span className="flex items-center gap-1 text-[9px] font-bold text-red-700"><span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" /> High Risk</span>
+          <span className="flex items-center gap-1 text-[9px] font-bold text-amber-700"><span className="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block" /> Moderate</span>
+          <span className="flex items-center gap-1 text-[9px] font-bold text-emerald-700"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block" /> Monitoring</span>
+          {showHeatmap && heatmapOn && <span className="flex items-center gap-1 text-[9px] font-bold text-orange-700"><Layers size={10} className="text-orange-500" /> Heatmap</span>}
+          <span className="flex items-center gap-1 text-[9px] text-gray-500"><ShieldCheck size={11} className="text-emerald-600" /> Click zone for details</span>
         </div>
       )}
     </div>
   );
 }
+
 
 // ─── SVG Fallback (preserved from original for no-API / offline states) ────────
 

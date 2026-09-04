@@ -16,11 +16,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { InteractiveRiskMap, type RiskZonePoint } from "@/components/InteractiveRiskMap";
+import { geocodeLocation } from "@/lib/geocoding";
 import { AnalyticsCharts } from "@/components/AnalyticsCharts";
 import { DashboardSkeleton, AppLoadingScreen } from "@/components/SkeletonLoader";
 import { RiskPredictionPanel } from "@/components/RiskPredictionPanel";
 import { AdminOutbreakPanel } from "@/components/AdminOutbreakPanel";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Marker } from "react-leaflet";
 import {
   Activity,
   AlertTriangle,
@@ -250,44 +252,69 @@ function WeatherWidget() {
 function RegionalRiskPanel() {
   const snapshot = trpc.farmer.snapshot.useQuery();
   const profile = snapshot.data?.profile;
-  const crop = snapshot.data?.crops?.[0];
   const latitude = Number(profile?.latitude ?? 20.5937);
   const longitude = Number(profile?.longitude ?? 78.9629);
+  
   const weather = trpc.weather.current.useQuery({ latitude, longitude });
   const current = weather.data?.current;
-  const alerts = buildRegionalRiskAlerts({
-    cropType: crop?.cropType,
-    cropName: crop?.name,
-    region: profile?.region,
-    state: profile?.state,
-    district: profile?.district,
-    temperature: current?.temperature_2m,
-    humidity: current?.relative_humidity_2m,
-    precipitation: current?.precipitation,
-    windSpeed: current?.wind_speed_10m,
-  });
+  
+  const outbreaksQuery = trpc.risk.allOutbreaks.useQuery();
+  const [geocodedOutbreaks, setGeocodedOutbreaks] = useState<any[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const runGeocoding = async () => {
+      const data = outbreaksQuery.data || [];
+      const results = await Promise.all(
+        data.map(async (ob) => {
+          const coords = await geocodeLocation(ob.state, ob.district);
+          return { ...ob, coords };
+        })
+      );
+      if (mounted) setGeocodedOutbreaks(results);
+    };
+    runGeocoding();
+    return () => { mounted = false; };
+  }, [outbreaksQuery.data]);
+
+  const alerts: RegionalRiskAlert[] = useMemo(() => {
+    return geocodedOutbreaks.map((ob) => ({
+      id: String(ob.id),
+      threat: ob.threatType,
+      riskLevel: ob.outbreakLevel === "warning" ? "High" : "Moderate",
+      crop: ob.affectedCropTypes || profile?.primaryCrop || "Various Crops",
+      region: `${ob.district}, ${ob.state}`,
+      reason: `Based on ${ob.reportCount} local reports and predictive models (score: ${ob.averageRiskScore}/100).`,
+      outlook: `Requires close monitoring in ${ob.district}.`,
+      actions: ["Inspect fields closely", "Prepare preventive measures", "Report any anomalies"],
+      label: "LIVE THREAT"
+    }));
+  }, [geocodedOutbreaks, profile?.primaryCrop]);
+
   const [selectedThreatId, setSelectedThreatId] = useState<string | null>(null);
   const [activeRiskFilter, setActiveRiskFilter] = useState<"all" | "High" | "Moderate" | "Low">("all");
 
   const regionalPoints: RiskZonePoint[] = useMemo(() => {
-    const locName = [profile?.state, profile?.district].filter(Boolean).join(" · ") || profile?.region || "Local Zone";
-    return alerts.map((a, idx) => ({
-      id: a.id,
-      location: `${locName} (${a.threat})`,
-      position: {
-        lat: latitude + (idx === 0 ? 0 : (idx % 2 === 0 ? 0.38 : -0.38) * idx),
-        lng: longitude + (idx === 0 ? 0 : (idx % 2 === 0 ? -0.42 : 0.42) * idx),
-      },
-      scans: a.riskLevel === "High" ? 18 : a.riskLevel === "Moderate" ? 10 : 5,
-      highRisk: a.riskLevel === "High" ? 11 : a.riskLevel === "Moderate" ? 3 : 0,
-      threatName: a.threat,
-      primaryCrop: a.crop,
-      temperature: current?.temperature_2m,
-      humidity: current?.relative_humidity_2m,
-      advisory: a.outlook,
-      riskLevel: a.riskLevel === "High" ? "high" : a.riskLevel === "Moderate" ? "moderate" : "low",
-    }));
-  }, [alerts, profile, latitude, longitude, current]);
+    return geocodedOutbreaks.map((ob, idx) => {
+      // Use geocoded coords or fallback with offset to prevent stacking
+      const lat = ob.coords ? ob.coords.lat : latitude + (idx % 2 === 0 ? 0.38 : -0.38) * idx;
+      const lng = ob.coords ? ob.coords.lng : longitude + (idx % 2 === 0 ? -0.42 : 0.42) * idx;
+      
+      return {
+        id: String(ob.id),
+        location: `${ob.district}, ${ob.state} (${ob.threatType})`,
+        position: { lat, lng },
+        scans: ob.reportCount * 3,
+        highRisk: ob.reportCount,
+        threatName: ob.threatType,
+        primaryCrop: ob.affectedCropTypes || profile?.primaryCrop || "Crops",
+        temperature: current?.temperature_2m,
+        humidity: current?.relative_humidity_2m,
+        advisory: "Monitor closely",
+        riskLevel: ob.outbreakLevel === "warning" ? "high" : "moderate",
+      };
+    });
+  }, [geocodedOutbreaks, latitude, longitude, profile?.primaryCrop, current]);
 
   const tone = (level: RegionalRiskAlert["riskLevel"]) =>
     level === "High" ? "high" : level === "Moderate" ? "medium" : "healthy";
@@ -399,46 +426,69 @@ function RegionalRiskPanel() {
 function RiskAlertsWidget() {
   const snapshot = trpc.farmer.snapshot.useQuery();
   const profile = snapshot.data?.profile;
-  const crop = snapshot.data?.crops?.[0];
   const latitude = Number(profile?.latitude ?? 20.5937);
   const longitude = Number(profile?.longitude ?? 78.9629);
+  
   const weather = trpc.weather.current.useQuery({ latitude, longitude });
   const current = weather.data?.current;
-  const alerts = buildRegionalRiskAlerts({
-    cropType: crop?.cropType,
-    cropName: crop?.name,
-    region: profile?.region,
-    state: profile?.state,
-    district: profile?.district,
-    temperature: current?.temperature_2m,
-    humidity: current?.relative_humidity_2m,
-    precipitation: current?.precipitation,
-    windSpeed: current?.wind_speed_10m,
-  });
+
+  const outbreaksQuery = trpc.risk.allOutbreaks.useQuery();
+  const [geocodedOutbreaks, setGeocodedOutbreaks] = useState<any[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const runGeocoding = async () => {
+      const data = outbreaksQuery.data || [];
+      const results = await Promise.all(
+        data.map(async (ob) => {
+          const coords = await geocodeLocation(ob.state, ob.district);
+          return { ...ob, coords };
+        })
+      );
+      if (mounted) setGeocodedOutbreaks(results);
+    };
+    runGeocoding();
+    return () => { mounted = false; };
+  }, [outbreaksQuery.data]);
+
+  const alerts: RegionalRiskAlert[] = useMemo(() => {
+    return geocodedOutbreaks.map((ob) => ({
+      id: String(ob.id),
+      threat: ob.threatType,
+      riskLevel: ob.outbreakLevel === "warning" ? "High" : "Moderate",
+      crop: ob.affectedCropTypes || profile?.primaryCrop || "Various Crops",
+      region: `${ob.district}, ${ob.state}`,
+      reason: `Based on ${ob.reportCount} local reports and predictive models (score: ${ob.averageRiskScore}/100).`,
+      outlook: `Requires close monitoring in ${ob.district}.`,
+      actions: ["Inspect fields closely", "Prepare preventive measures", "Report any anomalies"],
+      label: "LIVE THREAT"
+    }));
+  }, [geocodedOutbreaks, profile?.primaryCrop]);
+
   const highRisk = alerts.filter((alert) => alert.riskLevel === "High").length;
   const moderateRisk = alerts.filter((alert) => alert.riskLevel === "Moderate").length;
   const [selectedRisk, setSelectedRisk] = useState<RegionalRiskAlert | null>(null);
   const weeklyHistory = buildWeeklyRiskHistory(snapshot.data?.scans ?? []);
 
   const regionalPoints: RiskZonePoint[] = useMemo(() => {
-    const locName = [profile?.state, profile?.district].filter(Boolean).join(" · ") || profile?.region || "Local Zone";
-    return alerts.slice(0, 3).map((a, idx) => ({
-      id: a.id,
-      location: `${locName}`,
-      position: {
-        lat: latitude + (idx === 0 ? 0 : 0.25 * idx),
-        lng: longitude + (idx === 0 ? 0 : -0.25 * idx),
-      },
-      scans: a.riskLevel === "High" ? 14 : 6,
-      highRisk: a.riskLevel === "High" ? 8 : 1,
-      threatName: a.threat,
-      primaryCrop: a.crop,
-      temperature: current?.temperature_2m,
-      humidity: current?.relative_humidity_2m,
-      advisory: a.outlook,
-      riskLevel: a.riskLevel === "High" ? "high" : a.riskLevel === "Moderate" ? "moderate" : "low",
-    }));
-  }, [alerts, profile, latitude, longitude, current]);
+    return geocodedOutbreaks.slice(0, 3).map((ob, idx) => {
+      const lat = ob.coords ? ob.coords.lat : latitude + (idx === 0 ? 0 : 0.25 * idx);
+      const lng = ob.coords ? ob.coords.lng : longitude + (idx === 0 ? 0 : -0.25 * idx);
+      return {
+        id: String(ob.id),
+        location: `${ob.district}, ${ob.state}`,
+        position: { lat, lng },
+        scans: ob.reportCount * 3,
+        highRisk: ob.reportCount,
+        threatName: ob.threatType,
+        primaryCrop: ob.affectedCropTypes || profile?.primaryCrop || "Crops",
+        temperature: current?.temperature_2m,
+        humidity: current?.relative_humidity_2m,
+        advisory: "Monitor closely",
+        riskLevel: ob.outbreakLevel === "warning" ? "high" : "moderate",
+      };
+    });
+  }, [geocodedOutbreaks, latitude, longitude, profile?.primaryCrop, current]);
 
   const summary =
     snapshot.isLoading || weather.isLoading
@@ -1438,24 +1488,15 @@ function LocalAuthPanel({ navigate, language }: { navigate: (path: string) => vo
   const reverseGeocodeSignup = (latitude: number, longitude: number) => {
     const key = `${latitude.toFixed(6)}:${longitude.toFixed(6)}`;
     signupGeocodeKey.current = key;
-    if (window.google?.maps) {
-      new google.maps.Geocoder().geocode({ location: { lat: latitude, lng: longitude } }, (results, status) => {
-        if (status !== "OK" || !results?.[0]) return;
-        setForm((current) => ({ ...current, ...mapGeocodedAddress(results[0].formatted_address, results[0].address_components, current) }));
+    fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(data => {
+        if (!data?.address) return;
+        const a = data.address;
+        setForm(current => ({ ...current, region: data.display_name || "", state: a.state || current.state || "", district: a.county || a.state_district || current.district || "", pinCode: a.postcode || current.pinCode || "", village: a.village || current.village || "", town: a.city || a.town || current.town || "" }));
         setGpsState("saved");
         toast.success("GPS location captured and address fields filled.");
-      });
-    } else {
-      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`)
-        .then(res => res.ok ? res.json() : null)
-        .then(data => {
-          if (!data?.address) return;
-          const a = data.address;
-          setForm(current => ({ ...current, region: data.display_name || "", state: a.state || current.state || "", district: a.county || a.state_district || current.district || "", pinCode: a.postcode || current.pinCode || "", village: a.village || current.village || "", town: a.city || a.town || current.town || "" }));
-          setGpsState("saved");
-          toast.success("GPS location captured and address fields filled.");
-        }).catch(() => {});
-    }
+      }).catch(() => {});
     return true;
   };
   const detectSignupLocation = () => {
@@ -1522,11 +1563,11 @@ function Profile({ role, logout, userId, userName }: { role: Role; logout: () =>
   const snapshot = trpc.farmer.snapshot.useQuery(undefined, { enabled: Boolean(userId) });
   const [displayName, setDisplayName] = useState(userName || (role === "admin" ? "System Administrator" : "Farmer"));
   const [region, setRegion] = useState(""); const [state, setState] = useState(""); const [district, setDistrict] = useState(""); const [pinCode, setPinCode] = useState(""); const [village, setVillage] = useState(""); const [town, setTown] = useState(""); const [latitude, setLatitude] = useState(""); const [longitude, setLongitude] = useState(""); const [gpsState, setGpsState] = useState<"idle" | "detecting" | "denied" | "saved">("idle");
-  const applyCoordinates = (lat: number, lng: number) => { setLatitude(lat.toFixed(6)); setLongitude(lng.toFixed(6)); setGpsState("saved"); if (window.google?.maps) { new google.maps.Geocoder().geocode({ location: { lat, lng } }, (results, status) => { if (status !== "OK" || !results?.[0]) return; const values = new Map<string, string>(); results[0].address_components.forEach((part) => part.types.forEach((type) => values.set(type, part.long_name))); setRegion(results[0].formatted_address); setState(values.get("administrative_area_level_1") ?? ""); setDistrict(values.get("administrative_area_level_2") ?? values.get("administrative_area_level_3") ?? ""); setPinCode(values.get("postal_code") ?? ""); setVillage(values.get("sublocality_level_1") ?? values.get("administrative_area_level_3") ?? ""); setTown(values.get("postal_town") ?? values.get("locality") ?? ""); }); } else { fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`).then(res => res.ok ? res.json() : null).then(data => { if (!data?.address) return; const a = data.address; setRegion(data.display_name || ""); setState(a.state || ""); setDistrict(a.county || a.state_district || ""); setPinCode(a.postcode || ""); setVillage(a.village || ""); setTown(a.city || a.town || ""); }).catch(() => {}); } };
+  const applyCoordinates = (lat: number, lng: number) => { setLatitude(lat.toFixed(6)); setLongitude(lng.toFixed(6)); setGpsState("saved"); fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`).then(res => res.ok ? res.json() : null).then(data => { if (!data?.address) return; const a = data.address; setRegion(data.display_name || ""); setState(a.state || ""); setDistrict(a.county || a.state_district || ""); setPinCode(a.postcode || ""); setVillage(a.village || ""); setTown(a.city || a.town || ""); }).catch(() => {}); };
   useEffect(() => { if (snapshot.data?.profile) { setDisplayName(snapshot.data.profile.displayName); setRegion(snapshot.data.profile.region ?? ""); setState(snapshot.data.profile.state ?? ""); setDistrict(snapshot.data.profile.district ?? ""); setPinCode(snapshot.data.profile.pinCode ?? ""); setVillage(snapshot.data.profile.village ?? ""); setTown(snapshot.data.profile.town ?? ""); setLatitude(String(snapshot.data.profile.latitude ?? "")); setLongitude(String(snapshot.data.profile.longitude ?? "")); } else if (userName) setDisplayName(userName); }, [snapshot.data?.profile, userName]);
   const update = trpc.farmer.updateProfile.useMutation();
   if (role === "farmer" && snapshot.isError) return <div className="page-stack"><EmptyState title="Profile unavailable" detail="Your saved profile could not be loaded." action={<Button onClick={() => snapshot.refetch()}>Retry</Button>} /></div>;
-  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">ACCOUNT</p><h1>Profile</h1><p>Manage your CropShield identity and notification preferences.</p></div><section className="surface-card profile-card"><div className="profile-header"><div className="avatar avatar-large">{getUserInitials(displayName)}</div><div><h2>{displayName}</h2><p>{role === "admin" ? "Administrator" : "Farmer"}</p></div></div><label>Display name<Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></label>{role === "admin" && <div className="admin-profile-note"><ShieldCheck size={18} /><div><b>Administrator workspace</b><p>Manage approvals, review crop cases, and maintain verified service directories.</p></div></div>}{role === "farmer" && <><label>Region<Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Add your operating region" /></label><div className="location-actions"><Button type="button" variant="outline" onClick={() => { if (!navigator.geolocation) { setGpsState("denied"); return; } setGpsState("detecting"); navigator.geolocation.getCurrentPosition((position) => { applyCoordinates(position.coords.latitude, position.coords.longitude); toast.success("GPS location captured and address fields filled; save your profile to persist them."); }, () => { setGpsState("denied"); toast.info("GPS was unavailable. Enter state, district, PIN, and village manually."); }, { enableHighAccuracy: false, timeout: 8000 }); }}>{gpsState === "detecting" ? "Detecting…" : "Use my GPS location"}</Button>{gpsState === "denied" && <small>GPS permission was unavailable. Manual location fields below are the fallback.</small>}</div><div className="location-fields"><label>State<Input value={state} onChange={(e) => setState(e.target.value)} placeholder="State" /></label><label>District<Input value={district} onChange={(e) => setDistrict(e.target.value)} placeholder="District" /></label><label>PIN code<Input value={pinCode} onChange={(e) => setPinCode(e.target.value)} placeholder="PIN code" inputMode="numeric" /></label><label>Village<Input value={village} onChange={(e) => setVillage(e.target.value)} placeholder="Optional village" /></label><label>Town<Input value={town} onChange={(e) => setTown(e.target.value)} placeholder="Optional town" /></label></div><div className="profile-location-map"><div className="section-heading"><div><p className="eyebrow">EXACT FIELD LOCATION</p><h2>Pin your farm on the map</h2></div><MapPin size={18} /></div><p className="map-help">Use GPS or tap the map to place the pin. You can still edit the fields manually.</p><MapView key={`${latitude}:${longitude}`} initialCenter={latitude && longitude ? { lat: Number(latitude), lng: Number(longitude) } : { lat: 20.5937, lng: 78.9629 }} initialZoom={latitude && longitude ? 14 : 4} onMapReady={(map) => { map.setMapTypeId("hybrid"); if (latitude && longitude) new google.maps.Marker({ map, position: { lat: Number(latitude), lng: Number(longitude) }, title: "Saved farm location" }); map.addListener("click", (event: google.maps.MapMouseEvent) => { if (event.latLng) applyCoordinates(event.latLng.lat(), event.latLng.lng()); }); }} /></div></>}<label>Role<Input value={role} readOnly /></label>{userId && <Button disabled={update.isPending} onClick={async () => { try { await update.mutateAsync({ displayName, region, state, district, pinCode, village, town, latitude: latitude ? Number(latitude) : undefined, longitude: longitude ? Number(longitude) : undefined }); toast.success("Profile saved"); } catch { toast.error("Profile could not be saved"); } }}>{update.isPending ? "Saving…" : "Save profile"}</Button>}<Button onClick={() => { logout(); toast.success("You have been signed out"); }} variant="outline"><LogOut size={17} /> Sign out</Button></section></div>;
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">ACCOUNT</p><h1>Profile</h1><p>Manage your CropShield identity and notification preferences.</p></div><section className="surface-card profile-card"><div className="profile-header"><div className="avatar avatar-large">{getUserInitials(displayName)}</div><div><h2>{displayName}</h2><p>{role === "admin" ? "Administrator" : "Farmer"}</p></div></div><label>Display name<Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></label>{role === "admin" && <div className="admin-profile-note"><ShieldCheck size={18} /><div><b>Administrator workspace</b><p>Manage approvals, review crop cases, and maintain verified service directories.</p></div></div>}{role === "farmer" && <><label>Region<Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Add your operating region" /></label><div className="location-actions"><Button type="button" variant="outline" onClick={() => { if (!navigator.geolocation) { setGpsState("denied"); return; } setGpsState("detecting"); navigator.geolocation.getCurrentPosition((position) => { applyCoordinates(position.coords.latitude, position.coords.longitude); toast.success("GPS location captured and address fields filled; save your profile to persist them."); }, () => { setGpsState("denied"); toast.info("GPS was unavailable. Enter state, district, PIN, and village manually."); }, { enableHighAccuracy: false, timeout: 8000 }); }}>{gpsState === "detecting" ? "Detecting…" : "Use my GPS location"}</Button>{gpsState === "denied" && <small>GPS permission was unavailable. Manual location fields below are the fallback.</small>}</div><div className="location-fields"><label>State<Input value={state} onChange={(e) => setState(e.target.value)} placeholder="State" /></label><label>District<Input value={district} onChange={(e) => setDistrict(e.target.value)} placeholder="District" /></label><label>PIN code<Input value={pinCode} onChange={(e) => setPinCode(e.target.value)} placeholder="PIN code" inputMode="numeric" /></label><label>Village<Input value={village} onChange={(e) => setVillage(e.target.value)} placeholder="Optional village" /></label><label>Town<Input value={town} onChange={(e) => setTown(e.target.value)} placeholder="Optional town" /></label></div><div className="profile-location-map"><div className="section-heading"><div><p className="eyebrow">EXACT FIELD LOCATION</p><h2>Pin your farm on the map</h2></div><MapPin size={18} /></div><p className="map-help">Use GPS or tap the map to place the pin. You can still edit the fields manually.</p><MapView key={`${latitude}:${longitude}`} initialCenter={latitude && longitude ? { lat: Number(latitude), lng: Number(longitude) } : { lat: 20.5937, lng: 78.9629 }} initialZoom={latitude && longitude ? 14 : 4} onMapClick={(e) => applyCoordinates(e.lat, e.lng)}>{latitude && longitude && <Marker position={{ lat: Number(latitude), lng: Number(longitude) }} />}</MapView></div></>}<label>Role<Input value={role} readOnly /></label>{userId && <Button disabled={update.isPending} onClick={async () => { try { await update.mutateAsync({ displayName, region, state, district, pinCode, village, town, latitude: latitude ? Number(latitude) : undefined, longitude: longitude ? Number(longitude) : undefined }); toast.success("Profile saved"); } catch { toast.error("Profile could not be saved"); } }}>{update.isPending ? "Saving…" : "Save profile"}</Button>}<Button onClick={() => { logout(); toast.success("You have been signed out"); }} variant="outline"><LogOut size={17} /> Sign out</Button></section></div>;
 }
 
 export default function Home() {

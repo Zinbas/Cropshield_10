@@ -10,6 +10,7 @@ const INDIAN_LOCATIONS = [
   { state: "Andhra Pradesh", districts: ["Guntur", "Krishna", "Kurnool", "Anantapur"], lat: 16.3067, lng: 80.4365 },
   { state: "Madhya Pradesh", districts: ["Bhopal", "Indore", "Jabalpur", "Gwalior"], lat: 23.2599, lng: 77.4126 },
   { state: "Rajasthan", districts: ["Jaipur", "Jodhpur", "Udaipur", "Kota"], lat: 26.9124, lng: 75.7873 },
+  { state: "Assam", districts: ["Guwahati", "Dibrugarh", "Jorhat", "Tezpur"], lat: 26.1445, lng: 91.7362 },
 ];
 
 const CROP_TYPES = ["Rice", "Wheat", "Cotton", "Tomato", "Potato", "Sugarcane", "Maize", "Soybean", "Groundnut", "Grapes", "Mango", "Onion", "Chilli", "Banana", "Mustard"];
@@ -151,7 +152,7 @@ export async function seedTestData(): Promise<{ farmers: number; scans: number; 
   }
 
   // Create ~10 regional outbreaks across different states
-  const outbreakStates = INDIAN_LOCATIONS.sort(() => Math.random() - 0.5).slice(0, 5);
+  const outbreakStates = INDIAN_LOCATIONS;
   for (const loc of outbreakStates) {
     const numOutbreaks = randomInt(1, 3);
     for (let o = 0; o < numOutbreaks; o++) {
