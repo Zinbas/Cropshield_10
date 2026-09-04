@@ -1,0 +1,1837 @@
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { Link, useLocation } from "wouter";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { Button } from "@/components/ui/button";
+import { trpc } from "@/lib/trpc";
+import { MapView } from "@/components/Map";
+import { SUPPORTED_LANGUAGES, getStoredLanguage, setStoredLanguage, translate, type LanguageCode } from "@/lib/i18n";
+import { getDistributionPercentages } from "@/lib/analytics";
+import { buildRegionalRiskAlerts, type RegionalRiskAlert } from "@/lib/regionalRisk";
+import { buildRegionalHeatmapPoints, heatmapRiskLabel } from "@/lib/regionalHeatmap";
+import { buildRecommendationProgress, type RecommendationProgress } from "@/lib/scanUtils";
+import { buildWeeklyRiskHistory } from "@/lib/weeklyRisk";
+import { LOCAL_SIGNUP_ROLES } from "@/lib/authRoles";
+const SHOWCASE_CROP_IMAGES = ["/manus-storage/corn-field-wikimedia_2ae8906e.jpg", "/manus-storage/cover-crop-field-wikimedia_304c34cc.jpg"];
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { toast } from "sonner";
+import { InteractiveRiskMap, type RiskZonePoint } from "@/components/InteractiveRiskMap";
+import { AnalyticsCharts } from "@/components/AnalyticsCharts";
+import { DashboardSkeleton, AppLoadingScreen } from "@/components/SkeletonLoader";
+import { RiskPredictionPanel } from "@/components/RiskPredictionPanel";
+import { AdminOutbreakPanel } from "@/components/AdminOutbreakPanel";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Activity,
+  AlertTriangle,
+  CloudSun,
+  ArrowRight,
+  BarChart3,
+  Bell,
+  Camera,
+  Check,
+  ChevronRight,
+  ChevronDown,
+  CircleUserRound,
+  ClipboardList,
+  CloudRain,
+  CloudUpload,
+  FileSearch,
+  Filter,
+  FolderOpen,
+  Gauge,
+  Grid2X2,
+  Leaf,
+  Lightbulb,
+  LogOut,
+  MapPin,
+  MessageCircle,
+  Menu,
+  PhoneCall,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sprout,
+  Store,
+  Stethoscope,
+  UserRound,
+  UserCheck,
+  UserRoundCog,
+  Trash2,
+  Users,
+  WifiOff,
+  X,
+  Maximize2,
+  Clock,
+  Home as HomeIcon,
+  LayoutGrid,
+  Globe,
+  Settings,
+} from "lucide-react";
+
+type Role = "farmer" | "admin";
+type Section = "dashboard" | "crops" | "scan" | "cases" | "profile" | "farmers" | "analytics" | "scans" | "experts" | "stores" | "risks" | "history" | "more";
+
+export function getUserInitials(name?: string | null) {
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return "U";
+  return parts.slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
+
+export function getScanNextSteps(riskLevel: string, disease?: string | null) {
+  const risk = riskLevel.toLowerCase();
+  const subject = disease && disease !== "No disease identified" ? disease : "the visible crop concern";
+  if (risk === "critical" || risk === "high") return [
+    `Isolate the affected area and check nearby plants for ${subject}.`,
+    "Take a second close-up photo in good daylight and keep this case open for follow-up.",
+    "Contact a verified agricultural expert before applying treatment.",
+  ];
+  if (risk === "medium") return [
+    `Recheck ${subject} within the next 24–48 hours and note any spread.`,
+    "Improve airflow, watering, and field hygiene while you monitor the crop.",
+    "Contact a verified expert if symptoms increase or the crop begins to wilt.",
+  ];
+  return [
+    "Continue the current care routine and monitor new growth.",
+    "Capture another scan if the color, texture, or leaf shape changes.",
+    "Keep this result in Cases so you can compare future observations.",
+  ];
+}
+
+type ExpertContact = { phone?: string | null; email?: string | null };
+
+export function validateCropImage(file: { type: string; size: number }) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return "Please choose a JPEG, PNG, or WebP image.";
+  if (file.size > 12 * 1024 * 1024) return "Please choose an image smaller than 12 MB.";
+  return null;
+}
+
+export function getExpertContactHref(expert: ExpertContact, action: "call" | "message") {
+  const phone = expert.phone?.replace(/[^\d+]/g, "");
+  if (action === "call") return phone ? `tel:${phone}` : "";
+  return phone ? `sms:${phone}` : expert.email ? `mailto:${expert.email}` : "";
+}
+
+const nav: { id: Section; label: string; icon: typeof Grid2X2; roles: Role[] }[] = [
+  { id: "dashboard", label: "Home", icon: HomeIcon, roles: ["farmer", "admin"] },
+  { id: "risks", label: "Alerts", icon: AlertTriangle, roles: ["farmer"] },
+  { id: "crops", label: "My Crops", icon: Sprout, roles: ["farmer"] },
+  { id: "history", label: "History", icon: Clock, roles: ["farmer"] },
+  { id: "scans", label: "Scans", icon: FileSearch, roles: ["farmer"] },
+  { id: "farmers", label: "Farmers", icon: Users, roles: ["admin"] },
+  { id: "scans", label: "Scans", icon: FileSearch, roles: ["admin"] },
+  { id: "cases", label: "Cases", icon: ClipboardList, roles: ["admin"] },
+  { id: "experts", label: "Experts", icon: Stethoscope, roles: ["farmer", "admin"] },
+  { id: "stores", label: "Stores", icon: Store, roles: ["farmer", "admin"] },
+  { id: "analytics", label: "Analytics", icon: BarChart3, roles: ["admin"] },
+  { id: "more", label: "More", icon: Menu, roles: ["farmer", "admin"] },
+  { id: "profile", label: "Profile", icon: UserRound, roles: ["farmer", "admin"] },
+];
+
+export function getSection(path: string): Section {
+  const raw = path.split("/").filter(Boolean).pop() as Section | undefined;
+  // Scan is a deliberate primary action rather than a persistent nav item.
+  return raw === "scan" || raw === "history" || nav.some((item) => item.id === raw) ? raw! : "dashboard";
+}
+
+export function getPrimaryMobileSectionIds(role: Role): Section[] {
+  return role === "farmer" ? ["dashboard", "risks", "history", "more"] : ["dashboard", "scans", "cases", "more"];
+}
+
+function Logo({ compact = false }: { compact?: boolean }) {
+  return <div className={`brand-mark${compact ? " brand-mark-compact" : ""}`}><img className="brand-logo" src="/logo.svg" alt="CropShield logo" /><span>CropShield</span></div>;
+}
+
+function StatusChip({ children, tone = "healthy" }: { children: React.ReactNode; tone?: "healthy" | "medium" | "high" | "neutral" }) {
+  return <span className={`status-chip status-${tone}`}>{children}</span>;
+}
+
+function EmptyState({ title, detail, action }: { title: string; detail: string; action?: React.ReactNode }) {
+  return <div className="empty-state"><div className="empty-icon"><FolderOpen size={22} /></div><h3>{title}</h3><p>{detail}</p>{action}</div>;
+}
+
+function NetworkMode() {
+  const [mode, setMode] = useState<"good" | "poor" | "offline">(() => (typeof window !== "undefined" && (localStorage.getItem("cropshield-network-mode") as "good" | "poor" | "offline") ) || "good");
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, []);
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (dropRef.current && !dropRef.current.contains(e.target as Node)) setDropdownOpen(false);
+    };
+    if (dropdownOpen) document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [dropdownOpen]);
+
+  const effective = online ? mode : "offline";
+
+  const apply = (next: "good" | "poor" | "offline") => {
+    setMode(next);
+    localStorage.setItem("cropshield-network-mode", next);
+    setDropdownOpen(false);
+    toast.success(`Network: ${next === "good" ? "Good connection" : next === "poor" ? "Poor connection" : "Offline mode"}`);
+  };
+
+  const config = {
+    good:    { color: "#22c55e", bg: "rgba(34,197,94,0.1)", border: "rgba(34,197,94,0.25)", label: "Online", bars: 3 },
+    poor:    { color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.25)", label: "Poor",   bars: 2 },
+    offline: { color: "#94a3b8", bg: "rgba(148,163,184,0.1)", border: "rgba(148,163,184,0.25)", label: "Offline", bars: 0 },
+  };
+
+  const c = config[effective];
+
+  return (
+    <div className="relative" ref={dropRef}>
+      <button
+        type="button"
+        className="conn-toggle-btn"
+        style={{ background: c.bg, borderColor: c.border }}
+        onClick={() => setDropdownOpen(prev => !prev)}
+        aria-label="Connection mode"
+        title={`Connection: ${c.label}`}
+      >
+        {/* Signal Bars */}
+        <svg width="16" height="14" viewBox="0 0 16 14" fill="none" className="conn-signal-svg">
+          <rect x="1"  y="10" width="3" height="4" rx="1" fill={effective !== "offline" ? c.color : "#cbd5e1"} opacity={effective !== "offline" ? 1 : 0.35} />
+          <rect x="6"  y="6"  width="3" height="8" rx="1" fill={c.bars >= 2 ? c.color : "#cbd5e1"} opacity={c.bars >= 2 ? 1 : 0.25} />
+          <rect x="11" y="1"  width="3" height="13" rx="1" fill={c.bars >= 3 ? c.color : "#cbd5e1"} opacity={c.bars >= 3 ? 1 : 0.25} />
+          {effective === "offline" && <line x1="1" y1="1" x2="15" y2="13" stroke="#ef4444" strokeWidth="1.8" strokeLinecap="round" />}
+        </svg>
+      </button>
+
+      {dropdownOpen && (
+        <div className="conn-dropdown">
+          <p className="conn-dropdown-title">Connection Mode</p>
+          {(["good", "poor", "offline"] as const).map(key => {
+            const opt = config[key];
+            const active = effective === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                className={`conn-dropdown-option${active ? " active" : ""}`}
+                onClick={() => apply(key)}
+              >
+                <span className="conn-dropdown-dot" style={{ background: opt.color }} />
+                <span className="conn-dropdown-label">{key === "good" ? "Good Connection" : key === "poor" ? "Poor Connection" : "Offline Mode"}</span>
+                {active && <Check size={14} className="conn-dropdown-check" style={{ color: opt.color }} />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WeatherWidget() {
+  const [coords, setCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationState, setLocationState] = useState<"idle" | "detecting" | "denied">("idle");
+  const weather = trpc.weather.current.useQuery(coords ?? { latitude: 20.5937, longitude: 78.9629 }, { enabled: Boolean(coords) });
+  const detect = () => { if (!navigator.geolocation) { setLocationState("denied"); return; } setLocationState("detecting"); navigator.geolocation.getCurrentPosition((position) => { setCoords({ latitude: position.coords.latitude, longitude: position.coords.longitude }); setLocationState("idle"); }, () => setLocationState("denied"), { enableHighAccuracy: false, timeout: 8000 }); };
+  useEffect(() => { detect(); }, []);
+  const current = weather.data?.current;
+  const precipitation = Number(current?.precipitation ?? 0);
+  const humidity = Number(current?.relative_humidity_2m ?? 0);
+  const wind = Number(current?.wind_speed_10m ?? 0);
+  const weatherGuidance = precipitation >= 5 ? { tone: "high", title: "Wet-weather watch", detail: "Delay foliar spraying, improve drainage, and inspect leaves for fungal spread after rainfall." } : humidity >= 80 ? { tone: "medium", title: "Humidity watch", detail: "Increase airflow between plants and check shaded leaves closely for early disease symptoms." } : wind >= 30 ? { tone: "medium", title: "Wind watch", detail: "Secure young plants, avoid spraying in strong wind, and check for broken stems after gusts." } : { tone: "healthy", title: "Good field conditions", detail: "Conditions are suitable for routine crop care. Keep monitoring soil moisture and new growth." };
+  return <section className="surface-card weather-card"><div className="section-heading"><h2>Local weather</h2><CloudSun size={20} /></div>{locationState === "detecting" || weather.isLoading ? <div className="weather-state"><RefreshCw className="spin" size={18} /> Fetching local weather…</div> : weather.isError ? <div className="weather-state"><p>Weather is temporarily unavailable.</p><Button variant="outline" onClick={detect}>Retry location</Button></div> : current ? <><div className="weather-reading"><strong>{current.temperature_2m ?? "—"}°</strong><div><b>Current conditions</b><span>Humidity {current.relative_humidity_2m ?? "—"}% · Wind {current.wind_speed_10m ?? "—"} km/h</span><small>Updated {new Date(weather.data?.fetchedAt ?? Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</small></div></div><div className={`weather-guidance guidance-${weatherGuidance.tone}`}><ShieldCheck size={16} /><div><b>{weatherGuidance.title}</b><p>{weatherGuidance.detail}</p></div></div></> : <div className="weather-state"><p>Enable location to load local weather.</p><Button variant="outline" onClick={detect}>Use my location</Button></div>}{locationState === "denied" && <p className="weather-note">Location permission was unavailable. Enable it in your browser settings to see local conditions.</p>}</section>;
+}
+
+function RegionalRiskPanel() {
+  const snapshot = trpc.farmer.snapshot.useQuery();
+  const profile = snapshot.data?.profile;
+  const crop = snapshot.data?.crops?.[0];
+  const latitude = Number(profile?.latitude ?? 20.5937);
+  const longitude = Number(profile?.longitude ?? 78.9629);
+  const weather = trpc.weather.current.useQuery({ latitude, longitude });
+  const current = weather.data?.current;
+  const alerts = buildRegionalRiskAlerts({
+    cropType: crop?.cropType,
+    cropName: crop?.name,
+    region: profile?.region,
+    state: profile?.state,
+    district: profile?.district,
+    temperature: current?.temperature_2m,
+    humidity: current?.relative_humidity_2m,
+    precipitation: current?.precipitation,
+    windSpeed: current?.wind_speed_10m,
+  });
+  const [selectedThreatId, setSelectedThreatId] = useState<string | null>(null);
+  const [activeRiskFilter, setActiveRiskFilter] = useState<"all" | "High" | "Moderate" | "Low">("all");
+
+  const regionalPoints: RiskZonePoint[] = useMemo(() => {
+    const locName = [profile?.state, profile?.district].filter(Boolean).join(" · ") || profile?.region || "Local Zone";
+    return alerts.map((a, idx) => ({
+      id: a.id,
+      location: `${locName} (${a.threat})`,
+      position: {
+        lat: latitude + (idx === 0 ? 0 : (idx % 2 === 0 ? 0.38 : -0.38) * idx),
+        lng: longitude + (idx === 0 ? 0 : (idx % 2 === 0 ? -0.42 : 0.42) * idx),
+      },
+      scans: a.riskLevel === "High" ? 18 : a.riskLevel === "Moderate" ? 10 : 5,
+      highRisk: a.riskLevel === "High" ? 11 : a.riskLevel === "Moderate" ? 3 : 0,
+      threatName: a.threat,
+      primaryCrop: a.crop,
+      temperature: current?.temperature_2m,
+      humidity: current?.relative_humidity_2m,
+      advisory: a.outlook,
+      riskLevel: a.riskLevel === "High" ? "high" : a.riskLevel === "Moderate" ? "moderate" : "low",
+    }));
+  }, [alerts, profile, latitude, longitude, current]);
+
+  const tone = (level: RegionalRiskAlert["riskLevel"]) =>
+    level === "High" ? "high" : level === "Moderate" ? "medium" : "healthy";
+
+  const displayedAlerts = useMemo(() => {
+    if (activeRiskFilter === "all") return alerts;
+    return alerts.filter((a) => a.riskLevel === activeRiskFilter);
+  }, [alerts, activeRiskFilter]);
+
+  return (
+    <div className="space-y-4">
+      {/* Functional Interactive Map with Risk Circles */}
+      <section className="surface-card overflow-hidden p-0 border border-neutral-200/80 shadow-md">
+        <div className="p-4 bg-gradient-to-r from-emerald-950 to-neutral-900 text-white flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">Dynamic Risk Radar</p>
+            <h2 className="text-base font-bold text-white">Live Regional Disease & Pest Threat Map</h2>
+          </div>
+          <AlertTriangle size={20} className="text-amber-400" />
+        </div>
+        <InteractiveRiskMap
+          points={regionalPoints}
+          myLocation={{ lat: latitude, lng: longitude }}
+          title="Field Threat Zones · Tap any pulsing circle to inspect details"
+          onSelectPoint={(pt) => {
+            if (pt?.id) setSelectedThreatId(String(pt.id));
+          }}
+        />
+      </section>
+
+      <section className="surface-card regional-risk-panel">
+        <div className="section-heading flex-wrap gap-2">
+          <div>
+            <p className="eyebrow">PREDICTED RISK · 7–15 DAY OUTLOOK</p>
+            <h2>Regional disease & pest alerts ({displayedAlerts.length})</h2>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {(["all", "High", "Moderate", "Low"] as const).map((lvl) => (
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => setActiveRiskFilter(lvl)}
+                className={`text-xs px-3 py-1 rounded-full font-bold transition-all ${
+                  activeRiskFilter === lvl
+                    ? "bg-emerald-800 text-white shadow-sm"
+                    : "bg-neutral-100 text-neutral-600 hover:bg-neutral-200"
+                }`}
+              >
+                {lvl === "all" ? "All Threats" : `${lvl} Risk`}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="regional-risk-intro">
+          Threat zones are modeled dynamically from your crop, region, and microclimate. Tap any threat below or click a circle on the radar map to view field recommendations.
+        </p>
+        {snapshot.isLoading || weather.isLoading ? (
+          <div className="weather-state">
+            <RefreshCw className="spin" size={18} /> Updating regional risk signals…
+          </div>
+        ) : (
+          <div className="regional-risk-list">
+            {displayedAlerts.map((alert) => (
+              <article
+                className={`regional-risk-card transition-all duration-300 ${
+                  selectedThreatId === alert.id ? "ring-2 ring-emerald-600 shadow-lg scale-[1.01] bg-emerald-50/20" : ""
+                }`}
+                key={alert.id}
+                id={`alert-${alert.id}`}
+              >
+                <div className="regional-risk-card-top">
+                  <div>
+                    <span className="risk-label">{alert.label}</span>
+                    <h3>{alert.threat}</h3>
+                  </div>
+                  <StatusChip tone={tone(alert.riskLevel)}>{alert.riskLevel} risk</StatusChip>
+                </div>
+                <div className="regional-risk-meta">
+                  <span>
+                    <Sprout size={14} /> {alert.crop}
+                  </span>
+                  <span>
+                    <MapPin size={14} /> {alert.region}
+                  </span>
+                </div>
+                <p className="regional-risk-reason">
+                  <strong>Why this is flagged:</strong> {alert.reason}
+                </p>
+                <p className="regional-risk-outlook">
+                  <strong>Early warning:</strong> {alert.outlook}
+                </p>
+                <div className="regional-risk-actions">
+                  <strong>Preventive actions</strong>
+                  <ul>
+                    {alert.actions.map((action) => (
+                      <li key={action}>{action}</li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function RiskAlertsWidget() {
+  const snapshot = trpc.farmer.snapshot.useQuery();
+  const profile = snapshot.data?.profile;
+  const crop = snapshot.data?.crops?.[0];
+  const latitude = Number(profile?.latitude ?? 20.5937);
+  const longitude = Number(profile?.longitude ?? 78.9629);
+  const weather = trpc.weather.current.useQuery({ latitude, longitude });
+  const current = weather.data?.current;
+  const alerts = buildRegionalRiskAlerts({
+    cropType: crop?.cropType,
+    cropName: crop?.name,
+    region: profile?.region,
+    state: profile?.state,
+    district: profile?.district,
+    temperature: current?.temperature_2m,
+    humidity: current?.relative_humidity_2m,
+    precipitation: current?.precipitation,
+    windSpeed: current?.wind_speed_10m,
+  });
+  const highRisk = alerts.filter((alert) => alert.riskLevel === "High").length;
+  const moderateRisk = alerts.filter((alert) => alert.riskLevel === "Moderate").length;
+  const [selectedRisk, setSelectedRisk] = useState<RegionalRiskAlert | null>(null);
+  const weeklyHistory = buildWeeklyRiskHistory(snapshot.data?.scans ?? []);
+
+  const regionalPoints: RiskZonePoint[] = useMemo(() => {
+    const locName = [profile?.state, profile?.district].filter(Boolean).join(" · ") || profile?.region || "Local Zone";
+    return alerts.slice(0, 3).map((a, idx) => ({
+      id: a.id,
+      location: `${locName}`,
+      position: {
+        lat: latitude + (idx === 0 ? 0 : 0.25 * idx),
+        lng: longitude + (idx === 0 ? 0 : -0.25 * idx),
+      },
+      scans: a.riskLevel === "High" ? 14 : 6,
+      highRisk: a.riskLevel === "High" ? 8 : 1,
+      threatName: a.threat,
+      primaryCrop: a.crop,
+      temperature: current?.temperature_2m,
+      humidity: current?.relative_humidity_2m,
+      advisory: a.outlook,
+      riskLevel: a.riskLevel === "High" ? "high" : a.riskLevel === "Moderate" ? "moderate" : "low",
+    }));
+  }, [alerts, profile, latitude, longitude, current]);
+
+  const summary =
+    snapshot.isLoading || weather.isLoading
+      ? "Updating local risk signals…"
+      : alerts.length +
+        " potential threats estimated" +
+        (highRisk ? " · " + highRisk + " high risk" : "") +
+        ". Tap circles to inspect.";
+
+  return (
+    <section className="surface-card risk-info-widget">
+      <div className="risk-info-copy">
+        <div className="risk-info-icon">
+          <AlertTriangle size={19} />
+        </div>
+        <div>
+          <p className="eyebrow">REGIONAL RISK INFORMATION</p>
+          <h2>Early-warning alerts for your area</h2>
+          <p>{summary}</p>
+        </div>
+      </div>
+
+      {/* Mini Interactive Risk Radar with functional circle */}
+      <div className="mini-risk-map rounded-xl overflow-hidden shadow-sm">
+        <InteractiveRiskMap
+          points={regionalPoints}
+          myLocation={{ lat: latitude, lng: longitude }}
+          compact={true}
+          showHeatmap={false}
+          showMapTypeControl={false}
+          initialCenter={{ lat: latitude, lng: longitude }}
+          onSelectPoint={(pt) => {
+            const match = alerts.find((a) => a.threat === pt?.threatName) ?? alerts[0];
+            setSelectedRisk(match ?? null);
+          }}
+        />
+      </div>
+
+      <div className="mini-risk-legend" aria-label="Risk level legend">
+        <span>
+          <i className="legend-low" />
+          Low
+        </span>
+        <span>
+          <i className="legend-moderate" />
+          Moderate
+        </span>
+        <span>
+          <i className="legend-high" />
+          High
+        </span>
+      </div>
+
+      {selectedRisk && (
+        <button className="mini-risk-detail animate-in fade-in slide-in-from-top-2 duration-200" onClick={() => setSelectedRisk(null)}>
+          <strong>
+            {selectedRisk.riskLevel} risk · {selectedRisk.threat}
+          </strong>
+          <span>{selectedRisk.reason}</span>
+          <small>Tap map or card to dismiss · View all alerts below</small>
+        </button>
+      )}
+
+      <div className="weekly-risk">
+        <div className="weekly-risk-heading">
+          <strong>Weekly risk comparison</strong>
+          <span>Approved scan signals</span>
+        </div>
+        <div className="weekly-risk-bars">
+          {weeklyHistory.map((point) => (
+            <div
+              className="weekly-risk-point group cursor-pointer"
+              key={point.label}
+              title={`${point.label}: ${point.total} scans, ${point.high} high risk`}
+            >
+              <div className="weekly-risk-bar group-hover:bg-neutral-200 transition-colors">
+                <i style={{ height: `${Math.max(point.intensity, point.total ? 14 : 4)}%` }} />
+              </div>
+              <b>{point.total}</b>
+              <small>{point.label}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <Link className="risk-info-link" href="/farmer/risks">
+        View full risk map & alerts <ArrowRight size={16} />
+      </Link>
+    </section>
+  );
+}
+
+function RiskAlertsPage() {
+  return (
+    <div className="page-stack">
+      <div className="admin-title">
+        <p className="eyebrow">FARMER SAFETY CENTER</p>
+        <h1>Risk Alerts</h1>
+        <p>AI-powered predictions and regional alerts for your crops.</p>
+      </div>
+      <RiskPredictionPanel onNavigateToScan={() => window.location.assign("/farmer/scan")} />
+    </div>
+  );
+}
+
+function Donut() {
+  return (
+    <div className="donut-wrap">
+      <div className="donut">
+        <div>
+          <strong>85%</strong>
+          <span>OPTIMAL</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FarmerDashboard({ onScan, user }: { onScan: () => void; user?: { name?: string | null } | null }) {
+  const snapshot = trpc.farmer.snapshot.useQuery();
+  const data = snapshot.data;
+
+  if (snapshot.isLoading) {
+    return <DashboardSkeleton />;
+  }
+
+  const crops = data?.crops ?? [];
+  const scans = data?.scans ?? [];
+  const atRisk = crops.filter((crop) => crop.status === "at_risk").length;
+  const latest = scans[0];
+  const recommendation = (() => {
+    try {
+      return latest?.recommendations ? JSON.parse(latest.recommendations)[0] : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
+
+  const firstName = user?.name?.split(" ")[0] || "Farmer";
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
+  const statusMessage = atRisk > 0
+    ? `⚠️ ${atRisk} crop${atRisk > 1 ? "s" : ""} need${atRisk === 1 ? "s" : ""} attention`
+    : crops.length > 0 ? "✅ Your farm is looking good" : "🌱 Add your first crop to get started";
+
+  return (
+    <div className="page-stack space-y-4">
+      {/* Simple greeting */}
+      <section className="dashboard-greeting">
+        <div>
+          <h1 className="greeting-text">{greeting}, {firstName} 👋</h1>
+          <p className="greeting-status">{statusMessage}</p>
+        </div>
+        <div className="avatar avatar-large">{getUserInitials(user?.name)}</div>
+      </section>
+
+      {/* Inline weather strip */}
+      <InlineWeatherStrip />
+
+      {/* Scan CTA Hero */}
+      <button className="scan-hero group active:scale-95 transition-all shadow-lg" onClick={onScan}>
+        <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+          <Camera size={26} className="text-white" />
+        </div>
+        <span className="text-left flex-1 min-w-0">
+          <b className="text-base tracking-wide block">📸 Check your crop</b>
+          <small className="text-xs text-white/80 block truncate">Take a photo to see if your crop is healthy</small>
+        </span>
+        <ArrowRight size={22} className="shrink-0 group-hover:translate-x-1 transition-transform" />
+      </button>
+
+      {/* Latest scan card */}
+      {latest && (
+        <Link href="/farmer/history" className="latest-scan-card surface-card">
+          <div className="latest-scan-photo">
+            {latest.imageUrl ? (
+              <img src={latest.imageUrl} alt="Crop scan" />
+            ) : (
+              <div className="latest-scan-placeholder"><Sprout size={24} /></div>
+            )}
+          </div>
+          <div className="latest-scan-info">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
+              <span className={`risk-dot risk-dot-${latest.riskLevel === "high" || latest.riskLevel === "critical" ? "high" : latest.riskLevel === "medium" ? "medium" : "low"}`} />
+              <h3 style={{ fontSize: '14px', fontWeight: 700, margin: 0 }}>{latest.disease || "Crop check"}</h3>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--muted)', margin: 0 }}>
+              {latest.riskLevel === "high" || latest.riskLevel === "critical" ? "Needs attention" : latest.riskLevel === "medium" ? "Keep watching" : "Looking healthy"} · {new Date(latest.createdAt).toLocaleDateString()}
+            </p>
+          </div>
+          <ChevronRight size={18} style={{ color: 'var(--muted)', flexShrink: 0 }} />
+        </Link>
+      )}
+
+      {/* Crops section */}
+      <section>
+        <div className="section-heading">
+          <h2>Your crops</h2>
+          <Link href="/farmer/crops">View all</Link>
+        </div>
+        {crops.length ? (
+          <div className="horizontal-cards">
+            {crops.slice(0, 3).map((crop) => (
+              <article className="crop-card" key={crop.id}>
+                <div
+                  className={`crop-thumb ${
+                    crop.status === "at_risk" ? "tomato" : crop.status === "monitoring" ? "potato" : "rice"
+                  }`}
+                >
+                  <Sprout />
+                </div>
+                <StatusChip tone={crop.status === "at_risk" ? "high" : crop.status === "monitoring" ? "medium" : "healthy"}>
+                  {crop.status === "at_risk" ? "⚠️ At risk" : crop.status === "monitoring" ? "👀 Watching" : "✅ Healthy"}
+                </StatusChip>
+                <h3>{crop.name}</h3>
+                <p>{crop.cropType}</p>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="surface-card">
+            <EmptyState
+              title="Add your first crop"
+              detail="Tell us what you grow so we can help you better."
+              action={
+                <Button asChild>
+                  <Link href="/farmer/crops">Add crop</Link>
+                </Button>
+              }
+            />
+          </div>
+        )}
+      </section>
+
+      {/* Quick tip */}
+      <section className="recommendation">
+        <div className="recommendation-icon">
+          <Lightbulb size={22} />
+        </div>
+        <div>
+          <p className="eyebrow">💡 TIP FOR YOU</p>
+          <h3>{latest?.disease || "Complete your profile"}</h3>
+          <p>
+            {recommendation ||
+              (latest
+                ? "Check your latest scan and watch for changes."
+                : "Add your location and crops to get better advice.")}
+          </p>
+          <Button variant="outline" asChild>
+            <Link href={latest ? "/farmer/history" : "/farmer/profile"}>
+              See details <ChevronRight size={16} />
+            </Link>
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function InlineWeatherStrip() {
+  const snapshot = trpc.farmer.snapshot.useQuery();
+  const profile = snapshot.data?.profile;
+  const latitude = Number(profile?.latitude ?? 20.5937);
+  const longitude = Number(profile?.longitude ?? 78.9629);
+  const weather = trpc.weather.current.useQuery({ latitude, longitude });
+  const current = weather.data?.current;
+
+  if (weather.isLoading || !current) {
+    return <div className="weather-strip"><CloudSun size={16} /><span style={{ fontSize: '12px', color: 'var(--muted)' }}>Loading weather…</span></div>;
+  }
+
+  const weatherDesc = (() => {
+    const code = current.weather_code ?? 0;
+    if (code >= 61) return "🌧️ Rain";
+    if (code >= 51) return "🌦️ Drizzle";
+    if (code >= 45) return "🌫️ Foggy";
+    if (code >= 3) return "☁️ Cloudy";
+    if (code >= 1) return "⛅ Partly cloudy";
+    return "☀️ Clear";
+  })();
+
+  return (
+    <div className="weather-strip">
+      <span>🌡️ {current.temperature_2m ?? "—"}°C</span>
+      <span className="weather-strip-divider">·</span>
+      <span>💧 {current.relative_humidity_2m ?? "—"}%</span>
+      <span className="weather-strip-divider">·</span>
+      <span>{weatherDesc}</span>
+    </div>
+  );
+}
+type ScanResult = { scanId: number; cropType: string; disease: string; riskLevel: string; confidence: number; assessment: string; symptoms: string[]; recommendations: string[]; fieldContext?: FieldContext | null; recommendationProgress?: RecommendationProgress[] };
+
+export function formatFieldContext(context?: FieldContext | null) {
+  if (!context) return [];
+  return [
+    context.soilType && `Soil: ${context.soilType}`,
+    context.soilPh !== undefined && `pH ${context.soilPh}`,
+    context.soilMoisture && `Moisture: ${context.soilMoisture}`,
+    context.cropCount !== undefined && `${context.cropCount} crops/plants`,
+    context.landArea !== undefined && `${context.landArea} ${context.landUnit ?? "land units"}`,
+    context.fieldNotes && `Notes: ${context.fieldNotes}`,
+  ].filter((item): item is string => Boolean(item));
+}
+
+export function formatGpsLabel(latitude?: number | string | null, longitude?: number | string | null) {
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null || latitude === "" || longitude === "") return "No GPS coordinates captured";
+  return `${Number(latitude).toFixed(6)}, ${Number(longitude).toFixed(6)}`;
+}
+
+export function parseRecommendationProgress(raw?: string | null): RecommendationProgress[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw);
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is RecommendationProgress => Boolean(item && typeof item.step === "string" && typeof item.completed === "boolean"));
+  } catch {
+    return [];
+  }
+}
+
+type ExpertRecord = { id: number; name: string; phone?: string | null; email?: string | null; qualification?: string | null; specialization?: string | null; organization?: string | null; experienceYears?: number | null; state?: string | null; district?: string | null; pinCode?: string | null; address?: string | null; availability?: string | null; status: string };
+
+function ExpertContactCard({ expert }: { expert: ExpertRecord }) {
+  const location = [expert.district, expert.state].filter(Boolean).join(", ") || "Location not provided";
+  const callHref = getExpertContactHref(expert, "call");
+  const messageHref = getExpertContactHref(expert, "message");
+  return <article className="expert-contact-card"><div className="expert-avatar">{getUserInitials(expert.name)}</div><div className="expert-contact-main"><div className="expert-contact-heading"><div><h3>{expert.name}</h3><p>{expert.specialization || "Agricultural expert"}{expert.organization ? ` · ${expert.organization}` : ""}</p></div><StatusChip>{expert.status}</StatusChip></div><div className="expert-contact-meta"><span><MapPin size={14} /> {location}</span>{expert.availability && <span>{expert.availability}</span>}{expert.phone && <span><PhoneCall size={14} /> {expert.phone}</span>}{expert.email && <span><MessageCircle size={14} /> {expert.email}</span>}</div>{expert.address && <small>{expert.address}</small>}<div className="expert-contact-actions">{callHref && <a className="contact-action" href={callHref}><PhoneCall size={15} /> Call</a>}{messageHref && <a className="contact-action contact-action-primary" href={messageHref}><MessageCircle size={15} /> Message</a>}</div></div></article>;
+}
+
+function NearbyExperts({ state, district }: { state?: string | null; district?: string | null }) {
+  const experts = trpc.farmer.verifiedExperts.useQuery({ state: state || undefined, district: district || undefined });
+  return <section className="surface-card nearby-experts"><div className="section-heading"><div><p className="eyebrow">FIELD SUPPORT</p><h2>Verified experts near your area</h2></div><Stethoscope size={20} /></div><p className="nearby-experts-intro">If you want a second opinion, these verified contacts are ordered by your saved district and state.</p>{experts.isLoading ? <div className="empty-state compact-empty"><RefreshCw className="spin" size={20} /><p>Finding verified experts…</p></div> : experts.isError ? <EmptyState title="Experts unavailable" detail="The expert directory could not be loaded right now." action={<Button variant="outline" onClick={() => experts.refetch()}>Retry</Button>} /> : experts.data?.length ? <div className="expert-contact-list">{experts.data.slice(0, 3).map((expert) => <ExpertContactCard key={expert.id} expert={expert} />)}</div> : <EmptyState title="No verified experts yet" detail="Verified expert contacts will appear here after an administrator approves them." />}</section>;
+}
+
+export function handlePhotoInputChange(event: ChangeEvent<HTMLInputElement>, onFile: (file?: File) => void) {
+  event.preventDefault();
+  event.stopPropagation();
+  onFile(event.currentTarget.files?.[0]);
+  event.currentTarget.value = "";
+}
+
+export function mapGeocodedAddress(formattedAddress: string, components: Array<{ long_name: string; types: string[] }>, current: { region?: string; state?: string; district?: string; pinCode?: string; village?: string; town?: string }) {
+  const values = new Map<string, string>();
+  components.forEach((part) => part.types.forEach((type) => values.set(type, part.long_name)));
+  return {
+    ...current,
+    region: formattedAddress,
+    state: values.get("administrative_area_level_1") ?? current.state ?? "",
+    district: values.get("administrative_area_level_2") ?? values.get("administrative_area_level_3") ?? current.district ?? "",
+    pinCode: values.get("postal_code") ?? current.pinCode ?? "",
+    village: values.get("sublocality_level_1") ?? values.get("administrative_area_level_3") ?? values.get("locality") ?? current.village ?? "",
+    town: values.get("postal_town") ?? values.get("locality") ?? current.town ?? "",
+  };
+}
+
+function ScanFlow({ onComplete, canAnalyze }: { onComplete: (scanId: number) => void; canAnalyze: boolean }) {
+  const [, navigate] = useLocation();
+  const [step, setStep] = useState<"start" | "preparing" | "preview" | "analyzing" | "result">("start");
+  const [fileName, setFileName] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [imageBase64, setImageBase64] = useState("");
+  const [mimeType, setMimeType] = useState<"image/jpeg" | "image/png" | "image/webp">("image/jpeg");
+  const [selectedCropId, setSelectedCropId] = useState("");
+  const [fieldContext, setFieldContext] = useState<FieldContext>({});
+  const [showContext, setShowContext] = useState(true);
+  const [result, setResult] = useState<ScanResult | null>(null);
+  const [progress, setProgress] = useState<RecommendationProgress[]>([]);
+  const cropOptions = trpc.farmer.crops.useQuery(undefined, { enabled: canAnalyze });
+  const snapshot = trpc.farmer.snapshot.useQuery(undefined, { enabled: canAnalyze });
+  const analyze = trpc.farmer.analyzeScan.useMutation();
+  const updateProgress = trpc.farmer.updateRecommendationProgress.useMutation();
+  const hasContext = Object.values(fieldContext).some((value) => value !== undefined && value !== "");
+  const updateContext = <K extends keyof FieldContext>(key: K, value: FieldContext[K]) => setFieldContext((current) => ({ ...current, [key]: value }));
+
+  const chooseFile = async (file?: File) => {
+    if (!file) return;
+    const validationError = validateCropImage(file);
+    if (validationError) { toast.error(validationError); return; }
+    setStep("preparing");
+    setFileName(file.name);
+    try {
+      const sourceUrl = URL.createObjectURL(file);
+      const image = new Image();
+      image.decoding = "async";
+      image.onload = () => {
+        URL.revokeObjectURL(sourceUrl);
+        const canvas = document.createElement("canvas");
+        const scale = Math.min(1, 1600 / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+        canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+        canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+        const context = canvas.getContext("2d", { alpha: false });
+        if (!context) { setStep("start"); toast.error("Your browser could not prepare the image. Please try another photo."); return; }
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.84);
+        setPreviewUrl(dataUrl);
+        setImageBase64(dataUrl);
+        setMimeType("image/jpeg");
+        setStep("preview");
+      };
+      image.onerror = () => { URL.revokeObjectURL(sourceUrl); setStep("start"); toast.error("The image could not be prepared for analysis. Please try another photo."); };
+      image.src = sourceUrl;
+    } catch (error) {
+      setStep("start");
+      toast.error(error instanceof Error ? error.message : "The image could not be prepared. Please try again.");
+    }
+  };
+
+  const resetScan = () => { setStep("start"); setResult(null); setProgress([]); setFileName(""); setPreviewUrl(""); setImageBase64(""); setSelectedCropId(""); setFieldContext({}); setShowContext(true); };
+  const skipContext = () => { setFieldContext({}); setShowContext(false); toast.info("Analysis will use the crop image only. You can add details on your next scan."); };
+  const beginAnalysis = async () => {
+    if (!canAnalyze) { toast.error("Sign in to run a real crop analysis."); return; }
+    setStep("analyzing");
+    try {
+      const assessment = await analyze.mutateAsync({ imageBase64, mimeType, fileName, cropId: selectedCropId ? Number(selectedCropId) : undefined, fieldContext: hasContext ? fieldContext : undefined });
+      const nextProgress = buildRecommendationProgress(assessment.recommendations ?? []);
+      setProgress(nextProgress);
+      setResult({ ...assessment, cropType: (assessment as any).cropType ?? "Unknown", recommendationProgress: nextProgress });
+      setStep("result");
+    } catch (error) {
+      setStep("preview");
+      const message = error instanceof Error ? error.message : "The scan could not be completed. Please try again.";
+      toast.error(message, { duration: 9000 });
+    }
+  };
+  const toggleRecommendation = async (index: number) => {
+    if (!result) return;
+    const previous = progress;
+    const next = progress.map((item, itemIndex) => itemIndex === index ? { ...item, completed: !item.completed } : item);
+    setProgress(next);
+    setResult({ ...result, recommendationProgress: next });
+    if (!result.scanId) return;
+    try {
+      await updateProgress.mutateAsync({ scanId: result.scanId, progress: next });
+      toast.success(next[index]?.completed ? "Step marked complete" : "Step moved back to pending");
+    } catch {
+      setProgress(previous);
+      setResult({ ...result, recommendationProgress: previous });
+      toast.error("The recommendation progress could not be saved.");
+    }
+  };
+
+  if (step === "preparing") return <div className="scan-state centered"><div className="spinner"><RefreshCw size={30} /></div><p className="eyebrow">GETTING READY</p><h1>Preparing your photo</h1><p>Making the image ready for checking.</p></div>;
+  if (step === "analyzing") return <div className="scan-state centered fade-in-up"><div className="spinner pulse-glow"><RefreshCw size={30} className="spin" /></div><p className="eyebrow">CHECKING YOUR CROP</p><h1>Looking at your plant</h1><p>We're checking the photo to see if your crop is healthy.</p><div className="progress-steps stagger-in"><span className="done"><Check size={14} /> Photo uploaded</span><span className="active"><Activity size={14} /> Checking for problems</span><span>Preparing advice</span><span>Saving results</span></div></div>;
+  if (step === "result" && result) {
+    const profile = snapshot.data?.profile;
+    const fallbackSteps = getScanNextSteps(result.riskLevel, result.disease);
+    const recommendations = result.recommendations?.length ? result.recommendations : fallbackSteps;
+    const resultProgress = progress.length ? progress : buildRecommendationProgress(recommendations);
+    const completedCount = resultProgress.filter((item) => item.completed).length;
+    const contextSummary = formatFieldContext(result.fieldContext);
+    return <div className="page-stack scan-results">
+      <div className="result-banner"><Check size={22} /><div><p className="eyebrow">✅ DONE</p><h1>Results ready!</h1><p>Your results are saved. Mark the steps below as you do them.</p></div></div>
+      <section className="surface-card result-card">
+        <div className="result-top">
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', marginBottom: '8px' }}>
+              <StatusChip tone={result.riskLevel === "high" || result.riskLevel === "critical" ? "high" : result.riskLevel === "medium" ? "medium" : "healthy"}>{result.riskLevel.toUpperCase()} RISK</StatusChip>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', background: '#eef2ff', color: '#4338ca', padding: '2px 8px', borderRadius: '9999px', fontSize: '10px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', border: '1px solid #e0e7ff', whiteSpace: 'nowrap' }}><CloudRain size={12} /> Weather-Adjusted</span>
+            </div>
+            <h2><span style={{ color: 'var(--primary)', fontWeight: 'bold' }}>{result.cropType || "Unknown"}</span> assessment</h2>
+            <p className="diagnosis-line"><b>Found:</b> {result.disease || "No disease found"}</p>
+            <p>Based on your photo and weather in your area.</p>
+          </div>
+          <div className="confidence"><strong>{result.confidence}%</strong><span>CONFIDENCE</span></div>
+        </div>
+        <div className="result-grid"><div><span className="eyebrow">WHAT WE NOTICED</span><p>{result.symptoms?.join(" ") || result.assessment}</p></div><div><span className="eyebrow">ADVICE</span><p>{result.assessment || "Your crop looks okay for now."}</p></div></div>
+        {contextSummary.length > 0 && <div className="context-summary"><div><p className="eyebrow">FIELD CONTEXT USED</p><h3>Your details help tailor the guidance</h3></div><div className="context-summary-list">{contextSummary.map((item) => <span key={item}>{item}</span>)}</div></div>}
+        <section className="recommendation-tracker"><div className="tracker-heading"><div><p className="eyebrow">WHAT TO DO NEXT</p><h3>Follow these steps</h3><p>Tap each step when you finish it.</p></div><strong>{completedCount}/{resultProgress.length}<small>DONE</small></strong></div><div className="tracker-progress"><span style={{ width: `${resultProgress.length ? (completedCount / resultProgress.length) * 100 : 0}%` }} /></div><div className="recommendation-list">{resultProgress.map((item, index) => <button type="button" className={`recommendation-step${item.completed ? " completed" : ""}`} aria-pressed={item.completed} key={`${item.step}-${index}`} onClick={() => void toggleRecommendation(index)}><span className="recommendation-check">{item.completed ? <Check size={16} /> : index + 1}</span><span className="recommendation-step-copy"><b>{item.step}</b><small>{item.completed ? "Done ✓" : "Tap when done"}</small></span><ChevronRight size={17} /></button>)}</div><div className="safety-note"><ShieldCheck size={16} /><span>Always follow product labels. Ask an expert if the problem gets worse.</span></div></section>
+        <div className="scan-result-actions"><Button onClick={() => onComplete(result.scanId)} disabled={!result.scanId}><ClipboardList size={17} /> Save results</Button><Button variant="outline" onClick={resetScan}><Camera size={16} /> Scan another crop</Button><Button variant="ghost" asChild><Link href="/farmer/history">View history <ChevronRight size={16} /></Link></Button></div>
+      </section>
+      <NearbyExperts state={profile?.state} district={profile?.district} />
+    </div>;
+  }
+  return <div className="page-stack scan-page"><button className="back-link scan-back" type="button" onClick={() => navigate("/farmer/dashboard")}>← Back to Home</button><section className="scan-intro"><div className="scan-orb"><Camera size={34} /></div><p className="eyebrow">CHECK YOUR CROP</p><h1>Find out what's wrong</h1><p>Take a clear photo of the sick plant. We will tell you what the problem is and how to fix it.</p></section>{step === "start" ? <section className="surface-card upload-stage"><div className="upload-stage-heading"><div className="step-number">1</div><div><p className="eyebrow">STEP 1</p><h2>Add a photo</h2><p>Make sure the picture is clear and shows the problem.</p></div></div><div className="upload-options"><label className="upload-card primary-upload"><input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onClick={(e) => e.stopPropagation()} onChange={(e) => handlePhotoInputChange(e, (file) => void chooseFile(file))} /><span className="upload-card-icon"><Camera size={23} /></span><b>Take a photo</b><span>Use your camera</span></label><label className="upload-card"><input type="file" accept="image/jpeg,image/png,image/webp" onClick={(e) => e.stopPropagation()} onChange={(e) => handlePhotoInputChange(e, (file) => void chooseFile(file))} /><span className="upload-card-icon"><CloudUpload size={23} /></span><b>Upload from gallery</b><span>Choose a saved picture</span></label></div><div className="upload-checklist"><span><Check size={15} /> Just one plant per photo</span><span><Check size={15} /> Get close to the leaf or stem</span></div></section> : <section className="surface-card preview-card"><div className="preview-card-heading"><div><p className="eyebrow">STEP 2</p><h2>Does the photo look clear?</h2><p>Make sure you can easily see the problem.</p></div><button className="icon-button" type="button" onClick={resetScan} aria-label="Replace image"><X size={18} /></button></div><div className="preview-placeholder">{previewUrl ? <img className="preview-image" src={previewUrl} alt="Selected crop" /> : <Leaf size={54} />}</div><div className="photo-ready"><div className="photo-ready-icon"><Check size={17} /></div><div><b>Photo ready</b></div></div>{cropOptions.data?.length ? <label className="scan-crop-select">Which crop is this? <span className="optional-label">optional</span><select value={selectedCropId} onChange={(event) => setSelectedCropId(event.target.value)}><option value="">Choose a crop</option>{cropOptions.data.map((crop) => <option value={crop.id} key={crop.id}>{crop.name} · {crop.cropType}</option>)}</select></label> : <div className="scan-note"><Leaf size={16} /><span>No crop records yet. You can still check this photo.</span></div>}<div className="field-context-panel"><div className="context-panel-heading"><div><p className="eyebrow">STEP 3</p><h3>Tell us more (Optional)</h3><p>You can skip this step if you are in a hurry.</p></div><button type="button" className="context-toggle" onClick={() => setShowContext((current) => !current)}>{showContext ? "Hide details" : "Add details"}</button></div>{showContext ? <><div className="context-form-grid"><label>Soil type <span className="optional-label">optional</span><Input value={fieldContext.soilType ?? ""} onChange={(event) => updateContext("soilType", event.target.value || undefined)} placeholder="e.g. sandy loam" /></label><label>Soil pH <span className="optional-label">optional</span><Input type="number" min="0" max="14" step="0.1" value={fieldContext.soilPh ?? ""} onChange={(event) => updateContext("soilPh", event.target.value ? Number(event.target.value) : undefined)} placeholder="0–14" /></label><label>Soil moisture <span className="optional-label">optional</span><select value={fieldContext.soilMoisture ?? ""} onChange={(event) => updateContext("soilMoisture", (event.target.value || undefined) as FieldContext["soilMoisture"])}><option value="">Choose moisture</option><option value="dry">Dry</option><option value="balanced">Balanced</option><option value="wet">Wet</option></select></label></div><label className="context-notes">What have you noticed? <span className="optional-label">optional</span><Textarea value={fieldContext.fieldNotes ?? ""} onChange={(event) => updateContext("fieldNotes", event.target.value || undefined)} placeholder="Describe when it started, how it is spreading, or anything you already tried." rows={3} /></label><button type="button" className="skip-context-button" onClick={skipContext}>Skip this and just check the photo</button></> : <div className="context-skipped"><Check size={16} /><span>Details skipped.</span></div>}</div><div className="button-row scan-actions"><Button variant="outline" onClick={resetScan}><X size={16} /> Change photo</Button><Button onClick={() => void beginAnalysis()} disabled={analyze.isPending || !canAnalyze}>{analyze.isPending ? "Checking…" : "Check photo"} <ArrowRight size={16} /></Button></div></section>}</div>;
+  }
+
+function ExpertsPage({ admin = false }: { admin?: boolean }) {
+  const profile = trpc.farmer.snapshot.useQuery(undefined, { enabled: !admin });
+  const farmerQuery = trpc.farmer.verifiedExperts.useQuery({ state: profile.data?.profile?.state || undefined, district: profile.data?.profile?.district || undefined }, { enabled: !admin });
+  const adminQuery = trpc.admin.experts.useQuery(undefined, { enabled: admin });
+  const create = trpc.admin.createExpert.useMutation({ onSuccess: async () => { await adminQuery.refetch(); toast.success("Expert registered for review"); }, onError: (error) => toast.error(error.message || "Expert could not be registered") });
+  const setStatus = trpc.admin.setExpertStatus.useMutation({
+    onSuccess: async (_result, variables) => { await adminQuery.refetch(); toast.success(`Expert ${variables.status === "verified" ? "approved" : variables.status}`); },
+    onError: (error) => toast.error(error.message || "Expert status could not be updated"),
+  });
+  const [name, setName] = useState(""); const [specialization, setSpecialization] = useState(""); const [organization, setOrganization] = useState(""); const [phone, setPhone] = useState(""); const [email, setEmail] = useState(""); const [state, setState] = useState(""); const [district, setDistrict] = useState(""); const [availability, setAvailability] = useState("");
+  const list = admin ? adminQuery.data ?? [] : farmerQuery.data ?? [];
+  const resetExpertForm = () => { setName(""); setSpecialization(""); setOrganization(""); setPhone(""); setEmail(""); setState(""); setDistrict(""); setAvailability(""); };
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">{admin ? "ADMINISTRATION" : "HELP"}</p><h1>{admin ? "Expert Management" : "Talk to an Expert"}</h1><p>{admin ? "Register, approve, reject, or suspend agricultural experts." : "Find people who can help you with your crops."}</p></div>{admin && <form className="entity-form entity-form-wide surface-card" onSubmit={async (event) => { event.preventDefault(); try { await create.mutateAsync({ name, specialization, organization, phone: phone || undefined, email: email || undefined, state: state || undefined, district: district || undefined, availability: availability || undefined }); resetExpertForm(); } catch { /* mutation callbacks surface the error */ } }}><div className="entity-form-grid"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Expert name" required /><Input value={specialization} onChange={(e) => setSpecialization(e.target.value)} placeholder="Specialization" /><Input value={organization} onChange={(e) => setOrganization(e.target.value)} placeholder="Organization" /><Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone number" /><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email (optional)" /><Input value={state} onChange={(e) => setState(e.target.value)} placeholder="State" /><Input value={district} onChange={(e) => setDistrict(e.target.value)} placeholder="District" /><Input value={availability} onChange={(e) => setAvailability(e.target.value)} placeholder="Availability" /></div><Button type="submit" disabled={create.isPending}>{create.isPending ? "Registering…" : "Register expert"}</Button></form>}<section className="directory-list">{(admin ? adminQuery.isLoading : farmerQuery.isLoading) ? <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Finding verified experts…</p></div> : (admin ? adminQuery.isError : farmerQuery.isError) ? <EmptyState title="Experts unavailable" detail="The expert directory could not be loaded." action={<Button onClick={() => (admin ? adminQuery.refetch() : farmerQuery.refetch())}>Retry</Button>} /> : list.length ? list.map((expert) => admin ? <article className={`directory-card entity-card entity-status-${expert.status}`} key={expert.id}><div className="expert-avatar">{getUserInitials(expert.name)}</div><div className="directory-card-main entity-card-main"><div className="entity-card-heading"><div className="entity-card-title"><h3>{expert.name}</h3><p>{expert.specialization || "Crop health specialist"}{expert.organization ? ` · ${expert.organization}` : ""}</p><p className="directory-contact-line">{[expert.district, expert.state].filter(Boolean).join(", ") || "Location not provided"}{expert.phone ? ` · ${expert.phone}` : ""}</p></div><StatusChip tone={expert.status === "verified" ? "healthy" : expert.status === "suspended" || expert.status === "rejected" ? "high" : "medium"}>{expert.status === "verified" ? "approved" : expert.status}</StatusChip></div><div className="entity-card-actions" aria-label={`Actions for ${expert.name}`}><Button className="entity-action entity-action-approve" size="sm" disabled={setStatus.isPending && setStatus.variables?.id === expert.id} onClick={() => setStatus.mutate({ id: expert.id, status: "verified" })} aria-label={`Approve ${expert.name}`} title="Approve"><Check size={15} /><span className="entity-action-label">Approve</span></Button><Button className="entity-action entity-action-reject" size="sm" variant="outline" disabled={setStatus.isPending && setStatus.variables?.id === expert.id} onClick={() => setStatus.mutate({ id: expert.id, status: "rejected" })} aria-label={`Reject ${expert.name}`} title="Reject"><X size={15} /><span className="entity-action-label">Reject</span></Button><Button className="entity-action entity-action-suspend" size="sm" variant="outline" disabled={setStatus.isPending && setStatus.variables?.id === expert.id} onClick={() => setStatus.mutate({ id: expert.id, status: "suspended" })} aria-label={`Suspend ${expert.name}`} title="Suspend"><Activity size={15} /><span className="entity-action-label">Suspend</span></Button></div></div><ChevronRight size={20} /></article> : <ExpertContactCard key={expert.id} expert={expert} />) : <EmptyState title={admin ? "No experts registered" : "No verified experts nearby"} detail={admin ? "Register the first expert to start the approval queue." : "Verified expert contacts will appear after administrative approval."} />}</section></div>;
+}
+
+function StoresPage({ admin = false }: { admin?: boolean }) {
+  const farmerQuery = trpc.farmer.approvedDrugStores.useQuery(undefined, { enabled: !admin });
+  const adminQuery = trpc.admin.drugStores.useQuery(undefined, { enabled: admin });
+  const create = trpc.admin.createDrugStore.useMutation({ onSuccess: async () => { await adminQuery.refetch(); toast.success("Store registered for review"); }, onError: (error) => toast.error(error.message || "Store could not be registered") });
+  const setStatus = trpc.admin.setDrugStoreStatus.useMutation({
+    onSuccess: async (_result, variables) => { await adminQuery.refetch(); toast.success(`Store ${variables.status === "approved" ? "approved" : variables.status}`); },
+    onError: (error) => toast.error(error.message || "Store status could not be updated"),
+  });
+  const [name, setName] = useState(""); const [address, setAddress] = useState(""); const [phone, setPhone] = useState(""); const [licenseInfo, setLicenseInfo] = useState("");
+  const list = admin ? adminQuery.data ?? [] : farmerQuery.data ?? [];
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">{admin ? "ADMINISTRATION" : "SHOPS"}</p><h1>{admin ? "Drug Store Management" : "Find a Store"}</h1><p>{admin ? "Register and moderate stores before they are shown as verified." : "Find trusted shops near you."}</p></div>{admin && <form className="entity-form surface-card" onSubmit={async (event) => { event.preventDefault(); try { await create.mutateAsync({ name, address, phone, licenseInfo }); setName(""); setAddress(""); setPhone(""); setLicenseInfo(""); } catch { /* mutation callbacks surface the error */ } }}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Store name" required /><Input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Address" required /><Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone" /><Input value={licenseInfo} onChange={(e) => setLicenseInfo(e.target.value)} placeholder="License / registration information" /><Button type="submit" disabled={create.isPending}>{create.isPending ? "Registering…" : "Register store"}</Button></form>}<section className="directory-list">{(admin ? adminQuery.isLoading : farmerQuery.isLoading) ? <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Finding verified stores…</p></div> : (admin ? adminQuery.isError : farmerQuery.isError) ? <EmptyState title="Stores unavailable" detail="The store directory could not be loaded." action={<Button onClick={() => (admin ? adminQuery.refetch() : farmerQuery.refetch())}>Retry</Button>} /> : list.length ? list.map((store) => <article className={`directory-card entity-card entity-status-${store.status}`} key={store.id}><div className="avatar avatar-green"><Store size={20} /></div><div className="directory-card-main entity-card-main"><div className="entity-card-heading"><div className="entity-card-title"><h3>{store.name}</h3><p>{store.address}</p><p className="directory-contact-line">{store.phone || "Phone not provided"}</p></div><StatusChip tone={store.status === "approved" ? "healthy" : store.status === "suspended" || store.status === "rejected" ? "high" : "medium"}>{store.status === "approved" ? "approved" : store.status}</StatusChip></div>{admin && <div className="entity-card-actions" aria-label={`Actions for ${store.name}`}><Button className="entity-action entity-action-approve" size="sm" disabled={setStatus.isPending && setStatus.variables?.id === store.id} onClick={() => setStatus.mutate({ id: store.id, status: "approved" })} aria-label={`Approve ${store.name}`} title="Approve"><Check size={15} /><span className="entity-action-label">Approve</span></Button><Button className="entity-action entity-action-reject" size="sm" variant="outline" disabled={setStatus.isPending && setStatus.variables?.id === store.id} onClick={() => setStatus.mutate({ id: store.id, status: "rejected" })} aria-label={`Reject ${store.name}`} title="Reject"><X size={15} /><span className="entity-action-label">Reject</span></Button><Button className="entity-action entity-action-suspend" size="sm" variant="outline" disabled={setStatus.isPending && setStatus.variables?.id === store.id} onClick={() => setStatus.mutate({ id: store.id, status: "suspended" })} aria-label={`Suspend ${store.name}`} title="Suspend"><Activity size={15} /><span className="entity-action-label">Suspend</span></Button></div>}</div></article>) : <EmptyState title={admin ? "No stores registered" : "No verified stores nearby"} detail={admin ? "Register an agricultural store to start the approval queue." : "Approved stores will appear after administrative review."} />}</section></div>;
+}
+
+function RiskHeatmap({ points, expanded = false, onToggle }: { points: ReturnType<typeof buildRegionalHeatmapPoints>; expanded?: boolean; onToggle?: () => void }) {
+  const mapPoints: RiskZonePoint[] = useMemo(() => {
+    return points.map((p) => {
+      const ratio = p.highRisk / Math.max(1, p.scans);
+      const riskLevel: "high" | "moderate" | "low" = ratio >= 0.5 ? "high" : ratio > 0 ? "moderate" : "low";
+      return {
+        location: p.location,
+        position: p.position,
+        scans: p.scans,
+        highRisk: p.highRisk,
+        farmers: p.farmers,
+        riskLevel,
+        threatName: riskLevel === "high" ? "Critical Pathogen Pressure" : riskLevel === "moderate" ? "Monitoring Alert" : "Routine Activity",
+        advisory: riskLevel === "high" ? "Active outbreak reported. Conduct immediate field inspection." : "Routine field surveillance recommended.",
+      };
+    });
+  }, [points]);
+
+  return (
+    <InteractiveRiskMap
+      points={mapPoints}
+      title="Admin Aggregated Regional Risk Heatmap"
+      expanded={expanded}
+      onToggleExpand={onToggle}
+    />
+  );
+}
+
+function Analytics() {
+  const overview = trpc.admin.overview.useQuery();
+  const { data } = overview;
+  const totals = data?.totals;
+
+  if (overview.isLoading) {
+    return (
+      <div className="page-stack space-y-4">
+        <div className="admin-title">
+          <p className="eyebrow">SYSTEM INSIGHTS</p>
+          <h1>Global Analytics</h1>
+          <p>Calculated from approved records across the CropShield network.</p>
+        </div>
+        <DashboardSkeleton />
+      </div>
+    );
+  }
+
+  if (overview.isError) {
+    return (
+      <div className="page-stack">
+        <EmptyState
+          title="Analytics unavailable"
+          detail="Approved analytics could not be loaded."
+          action={<Button onClick={() => overview.refetch()}>Retry</Button>}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-stack space-y-4">
+      <div className="admin-title">
+        <p className="eyebrow">SYSTEM INSIGHTS</p>
+        <h1>Global Analytics</h1>
+        <p>Calculated from approved records across the CropShield network.</p>
+      </div>
+      <AnalyticsCharts recentScans={data?.recentScans ?? []} totals={totals} distribution={data?.distribution} />
+    </div>
+  );
+}
+
+function AdminDashboard({ isLive = false }: { isLive?: boolean }) {
+  const overview = trpc.admin.overview.useQuery(undefined, { enabled: isLive });
+  const locations = trpc.admin.locationSummaries.useQuery(undefined, { enabled: isLive });
+  const { data } = overview;
+  const totals = data?.totals;
+  const heatmapPoints = buildRegionalHeatmapPoints(locations.data ?? []);
+  const [mapExpanded, setMapExpanded] = useState(false);
+  if (isLive && overview.isLoading) return <div className="app-loading"><Logo /><div className="spinner"><RefreshCw className="spin" size={26} /></div><p>Loading system overview…</p></div>;
+  if (isLive && overview.isError) return <div className="page-stack"><EmptyState title="Overview unavailable" detail="Approved system insights could not be loaded." action={<Button onClick={() => overview.refetch()}>Retry</Button>} /></div>;
+
+  return <div className="page-stack"><WeatherWidget /><section className="admin-title"><p className="eyebrow">SYSTEM OVERVIEW & DIAGNOSTICS</p><h1>Admin Panel</h1><p>Approved insights from the CropShield network.</p></section><div className="metric-grid"><div className="metric-card"><Users size={19} /><span>+12%</span><p>TOTAL FARMERS</p><strong>{totals ? totals.farmers.toLocaleString() : "—"}</strong></div><div className="metric-card"><FileSearch size={19} /><span>+5%</span><p>TOTAL SCANS</p><strong>{totals ? totals.scans.toLocaleString() : "—"}</strong></div></div><section className="risk-card"><div><AlertTriangle size={24} /><p className="eyebrow">HIGH-RISK CASES</p><strong>{totals ? totals.highRisk.toLocaleString() : "—"}</strong></div><p>Requires immediate attention</p><Link href="/admin/cases">View all <ArrowRight size={16} /></Link></section><section className="surface-card map-card"><div className="section-heading"><div><p className="eyebrow">AGGREGATED APPROVED DATA</p><h2>Regional Risk Heatmap</h2></div><MapPin size={20} /></div><p className="map-caption">Heat intensity reflects approved high-risk scans weighted against total approved scans. No individual farmer locations are exposed.</p><div className="heatmap-legend"><span><i className="heatmap-low" /> Routine</span><span><i className="heatmap-medium" /> Some elevated risk</span><span><i className="heatmap-high" /> Higher concentration</span></div><RiskHeatmap points={heatmapPoints} onToggle={() => setMapExpanded(true)} />{mapExpanded && <RiskHeatmap points={heatmapPoints} expanded onToggle={() => setMapExpanded(false)} />}{locations.isLoading ? <div className="loading-row"><RefreshCw className="spin" size={18} /> Loading regional aggregates…</div> : heatmapPoints.length ? heatmapPoints.slice(0, 5).map((point) => <div className="region-row" key={point.location}><span><b>{point.location}</b><small>{point.farmers} farmers · {point.scans} approved scans · {point.highRisk} high-risk</small></span><StatusChip tone={point.highRisk / point.scans >= 0.5 ? "high" : point.highRisk ? "medium" : "healthy"}>{heatmapRiskLabel(point.highRisk, point.scans)}</StatusChip></div>) : <EmptyState title="No approved regional data" detail="The heatmap will appear after approved scan records with saved coordinates are available." />}</section><section><div className="section-heading"><h2>Recent Activity</h2><Button variant="ghost" onClick={() => toast.info("Activity filters are ready for approved records.")}><Filter size={16} /> Filter</Button></div>{data?.recentScans?.length ? <div className="activity-list">{data.recentScans.slice(0, 3).map((scan) => <div key={scan.id}><div className={`activity-icon ${scan.riskLevel === "high" ? "danger" : "mint"}`}>{scan.riskLevel === "high" ? <AlertTriangle size={17} /> : <Sprout size={17} />}</div><p><b>{scan.riskLevel === "high" ? "High-risk scan detected" : "Approved scan logged"}</b><span>{scan.assessment || "Structured crop assessment available."}</span><small>{new Date(scan.createdAt).toLocaleString()} · Approved insight</small></p></div>)}</div> : <section className="surface-card"><EmptyState title="No approved activity" detail="Approved scan activity will appear here after review." /></section>}</section><AdminOutbreakPanel /></div>;
+}
+
+function LocationWeather({ latitude, longitude }: { latitude?: string | null; longitude?: string | null }) {
+  const hasCoords = Boolean(latitude && longitude);
+  const weather = trpc.weather.current.useQuery({ latitude: Number(latitude), longitude: Number(longitude) }, { enabled: hasCoords });
+  const current = weather.data?.current;
+  if (!hasCoords) return <small className="location-weather unavailable">Weather unavailable · add GPS coordinates to a farmer profile</small>;
+  if (weather.isLoading) return <small className="location-weather">Fetching group weather…</small>;
+  if (weather.isError || !current) return <small className="location-weather unavailable">Weather unavailable for this location</small>;
+  return <small className="location-weather">{current.temperature_2m ?? "—"}° · Humidity {current.relative_humidity_2m ?? "—"}% · Wind {current.wind_speed_10m ?? "—"} km/h</small>;
+}
+
+function Directory() {
+  const [query, setQuery] = useState("");
+  const [riskFilter, setRiskFilter] = useState("all");
+  const directory = trpc.admin.farmerInsights.useQuery();
+  const locations = trpc.admin.locationSummaries.useQuery();
+  const setStatus = trpc.admin.setFarmerStatus.useMutation({
+    onSuccess: async () => {
+      await Promise.all([directory.refetch(), locations.refetch()]);
+      toast.success("Farmer account status updated");
+    },
+    onError: (error) => toast.error(error.message || "Account status could not be updated"),
+  });
+  const deleteFarmer = trpc.admin.deleteFarmer.useMutation({
+    onSuccess: async () => {
+      await Promise.all([directory.refetch(), locations.refetch()]);
+      toast.success("Farmer account deleted");
+    },
+    onError: (error) => toast.error(error.message || "Farmer account could not be deleted"),
+  });
+  const { data } = directory;
+  if (directory.isLoading || locations.isLoading) return <div className="app-loading"><Logo /><div className="spinner"><RefreshCw className="spin" size={26} /></div><p>Loading farmer risk groups…</p></div>;
+  if (directory.isError || locations.isError) return <div className="page-stack"><EmptyState title="Directory unavailable" detail="Approved farmer location and risk data could not be loaded." action={<Button onClick={() => { directory.refetch(); locations.refetch(); }}>Retry</Button>} /></div>;
+  const farmers = (data ?? []).map((entry) => ({ id: entry.user.id, name: entry.profile?.displayName ?? entry.user.name ?? "Unnamed farmer", place: [entry.profile?.state, entry.profile?.district, entry.profile?.region].filter(Boolean).join(" · ") || "Location not provided", crops: entry.crops.map((crop) => crop.name).join(", ") || "No crops recorded", risk: entry.riskLevel, latest: entry.latestScan, accountStatus: entry.user.accountStatus }));
+  const filtered = farmers.filter((f) => (riskFilter === "all" || f.risk === riskFilter) && `${f.name} ${f.place} ${f.crops}`.toLowerCase().includes(query.toLowerCase()));
+  const busyId = setStatus.isPending ? setStatus.variables?.id : deleteFarmer.isPending ? deleteFarmer.variables?.id : undefined;
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">ADMINISTRATION</p><h1>Farmer Directory</h1><p>Group farmers by location and identify high or critical risk records.</p></div><div className="search-field"><Search size={18} /><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search farmers, state, district, or crop" /></div><section className="location-summary-grid">{(locations.data ?? []).map((location) => <article className="location-summary surface-card" key={location.location}><div className="section-heading"><h2>{location.location}</h2><MapPin size={17} /></div><p><b>{location.farmers}</b> farmers · <b>{location.scans}</b> approved scans</p><span>{location.crops.join(", ") || "No crops recorded"}</span><small>{location.diseases.length ? `Affected: ${location.diseases.join(", ")}` : "No affected diseases recorded"} · {location.highRisk} high/critical risk</small><LocationWeather latitude={location.latitude} longitude={location.longitude} /></article>)}</section><div className="filter-pills">{["all", "low", "medium", "high", "critical"].map((filter) => <button className={riskFilter === filter ? "active" : ""} key={filter} onClick={() => setRiskFilter(filter)}>{filter === "all" ? "All" : filter === "medium" ? "Moderate" : filter[0].toUpperCase() + filter.slice(1)}{filter !== "all" ? ` (${farmers.filter((farmer) => farmer.risk === filter).length})` : ` (${farmers.length})`}</button>)}</div><section className="directory-list">{filtered.length ? filtered.map((farmer) => <article className={`directory-card ${farmer.accountStatus === "disabled" ? "account-disabled" : ""}`} key={farmer.id}><div className="avatar avatar-green">{farmer.name.split(" ").map((x: string) => x[0]).join("")}</div><div className="directory-card-main"><div className="directory-card-heading"><div><h3>{farmer.name}</h3><p><MapPin size={14} /> {farmer.place}</p></div><StatusChip tone={farmer.accountStatus === "disabled" ? "high" : farmer.risk === "high" || farmer.risk === "critical" ? "high" : farmer.risk === "medium" ? "medium" : "healthy"}>{farmer.accountStatus === "disabled" ? "disabled" : `${farmer.risk} risk`}</StatusChip></div><span>{farmer.crops} · {farmer.latest ? `${farmer.latest.confidence ?? 0}% confidence` : "No approved scans"}</span><div className="account-actions" aria-label={`Account actions for ${farmer.name}`}><Button size="sm" variant="outline" disabled={busyId === farmer.id} onClick={() => { const next = farmer.accountStatus === "disabled" ? "active" : "disabled"; const action = next === "disabled" ? "disable" : "re-enable"; if (window.confirm(`Are you sure you want to ${action} ${farmer.name}?`)) setStatus.mutate({ id: farmer.id, accountStatus: next }); }}>{farmer.accountStatus === "disabled" ? <><UserCheck size={15} /> Re-enable</> : <><UserRoundCog size={15} /> Disable</>}</Button><Button size="sm" variant="outline" className="delete-account-button" disabled={busyId === farmer.id} onClick={() => { if (window.confirm(`Delete ${farmer.name} permanently? This removes the farmer profile, crops, scans, cases, and recommendations.`)) deleteFarmer.mutate({ id: farmer.id }); }}><Trash2 size={15} /> Delete</Button></div></div><ChevronRight size={20} /></article>) : <EmptyState title="No farmers found" detail="Try another search term or risk filter." />}</section></div>;
+}
+
+function CropList() {
+  const { data, isLoading, isError, refetch } = trpc.farmer.crops.useQuery();
+  const scans = trpc.farmer.scans.useQuery();
+  const create = trpc.farmer.createCrop.useMutation({ onSuccess: () => refetch() });
+  const [name, setName] = useState(""); const [cropType, setCropType] = useState(""); const [region, setRegion] = useState("");
+  let body: React.ReactNode;
+  if (isLoading || scans.isLoading) body = <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Loading your crop portfolio…</p></div>;
+  else if (isError || scans.isError) body = <EmptyState title="Crops unavailable" detail="We could not load your crop portfolio and latest assessments." action={<Button onClick={() => { refetch(); scans.refetch(); }}>Retry</Button>} />;
+  else if (data?.length) body = <div className="crop-grid">{data.map((crop) => { const latest = scans.data?.find((scan) => scan.cropId === crop.id); const risk = latest?.riskLevel ?? (crop.status === "at_risk" ? "high" : crop.status === "monitoring" ? "medium" : "low"); return <article className="crop-card surface-card" key={crop.id}>{latest?.imageUrl ? <img src={latest.imageUrl} alt={`${crop.name} latest scan`} /> : <div className="crop-image-fallback"><Sprout size={28} /></div>}<div className="crop-card-content"><div className="crop-card-heading"><div><p className="eyebrow">{crop.cropType}</p><h3>{crop.name}</h3></div><StatusChip tone={risk === "high" || risk === "critical" ? "high" : risk === "medium" ? "medium" : "healthy"}>{risk} risk</StatusChip></div><p className="crop-location"><MapPin size={14} /> {crop.region || "Location not provided"}</p><div className="crop-report-meta"><span>Latest report</span><b>{latest ? `${latest.confidence ?? 0}% confidence` : "Not scanned yet"}</b></div>{latest && <p className="crop-report-summary"><b>{latest.disease || "No disease identified"}</b> · {latest.assessment || "Structured assessment available."}</p>}<div className="crop-card-footer"><small>{latest ? new Date(latest.createdAt).toLocaleDateString() : "Awaiting first scan"}</small><Button size="sm" variant="outline" asChild><Link href="/farmer/scan">{latest ? "Rescan" : "Scan crop"}</Link></Button></div></div></article>; })}</div>;
+  else body = <EmptyState title="No crops yet" detail="Add your first crop record to begin monitoring field health." />;
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">FIELD PORTFOLIO</p><h1>My Crops</h1><p>Track the crops, latest reports, and field locations connected to your account.</p></div><section className="surface-card"><form className="crop-form" onSubmit={async (event) => { event.preventDefault(); try { await create.mutateAsync({ name, cropType, region: region || undefined }); setName(""); setCropType(""); setRegion(""); toast.success("Crop added to your portfolio"); } catch { toast.error("Crop could not be added"); } }}><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Crop name" required /><Input value={cropType} onChange={(e) => setCropType(e.target.value)} placeholder="Crop type" required /><Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Region (optional)" /><Button type="submit" disabled={create.isPending}>{create.isPending ? "Adding…" : "Add crop"}</Button></form>{body}</section></div>;
+}
+
+function HistoryPage() {
+  const scans = trpc.farmer.scans.useQuery();
+  const cases = trpc.farmer.cases.useQuery();
+  const [riskFilter, setRiskFilter] = useState<"all" | "low" | "medium" | "high" | "critical">("all");
+
+  const allScans = scans.data ?? [];
+  const allCases = cases.data ?? [];
+  const caseMap = new Map(allCases.map(c => [c.scanId, c]));
+
+  const filtered = useMemo(() => {
+    return allScans.filter(s => riskFilter === "all" || s.riskLevel === riskFilter);
+  }, [allScans, riskFilter]);
+
+  const riskDot = (level: string) => level === "high" || level === "critical" ? "high" : level === "medium" ? "medium" : "low";
+  const riskText = (level: string) => level === "high" || level === "critical" ? "Needs attention" : level === "medium" ? "Keep watching" : "Looking healthy";
+
+  return (
+    <div className="page-stack">
+      <div className="admin-title">
+        <p className="eyebrow">YOUR SCANS</p>
+        <h1>History</h1>
+        <p>All your past crop checks in one place.</p>
+      </div>
+
+      {/* Filter pills */}
+      <div className="history-filter-pills">
+        {(["all", "low", "medium", "high", "critical"] as const).map(f => (
+          <button key={f} className={`history-pill ${riskFilter === f ? "history-pill-active" : ""}`} onClick={() => setRiskFilter(f)}>
+            {f === "all" ? "All" : <><span className={`risk-dot risk-dot-${riskDot(f)}`} /> {f === "critical" ? "Critical" : f[0].toUpperCase() + f.slice(1)}</>}
+          </button>
+        ))}
+      </div>
+
+      {scans.isLoading ? (
+        <div className="surface-card" style={{ textAlign: 'center', padding: '32px' }}>
+          <RefreshCw size={22} className="spin" style={{ margin: '0 auto 8px' }} />
+          <p style={{ fontSize: '13px', color: 'var(--muted)' }}>Loading your history…</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="surface-card">
+          <EmptyState
+            title={allScans.length ? "No matching scans" : "No scans yet"}
+            detail={allScans.length ? "Try a different filter." : "Scan a crop to see your first result here."}
+            action={!allScans.length ? <Button asChild><Link href="/farmer/scan">📸 Scan crop</Link></Button> : undefined}
+          />
+        </div>
+      ) : (
+        <div className="history-timeline">
+          {filtered.map(scan => {
+            const linkedCase = caseMap.get(scan.id);
+            return (
+              <details className="history-timeline-card" key={scan.id}>
+                <summary className="history-timeline-summary">
+                  <div className="history-timeline-photo">
+                    {scan.imageUrl ? (
+                      <img src={scan.imageUrl} alt="" />
+                    ) : (
+                      <div className="history-timeline-photo-fallback"><Sprout size={18} /></div>
+                    )}
+                  </div>
+                  <div className="history-timeline-info">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className={`risk-dot risk-dot-${riskDot(scan.riskLevel)}`} />
+                      <h3>{scan.disease || "Crop check"}</h3>
+                    </div>
+                    <p>
+                      {riskText(scan.riskLevel)} · {new Date(scan.createdAt).toLocaleDateString()}
+                      {linkedCase && <span style={{ marginLeft: '6px', fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: linkedCase.status === 'resolved' ? '#dcfce7' : '#dbeafe', color: linkedCase.status === 'resolved' ? '#166534' : '#1e40af', fontWeight: 600 }}>📋 {linkedCase.reference}</span>}
+                    </p>
+                  </div>
+                  <ChevronRight className="history-chevron" size={16} />
+                </summary>
+                <div className="history-timeline-detail">
+                  {scan.assessment && <div><strong>What we found</strong><p>{scan.assessment}</p></div>}
+                  {scan.symptoms && <div><strong>What we noticed</strong><p>{(() => { try { return JSON.parse(scan.symptoms).join(". "); } catch { return scan.symptoms; } })()}</p></div>}
+                  {scan.recommendations && <div><strong>What to do</strong><p>{(() => { try { return JSON.parse(scan.recommendations).join(". "); } catch { return scan.recommendations; } })()}</p></div>}
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+                    <Button size="sm" variant="outline" asChild><Link href="/farmer/scan">📸 Scan again</Link></Button>
+                  </div>
+                </div>
+              </details>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MorePage({ go, logout, role, user }: { go: (id: Section) => void; logout: () => void; role: Role; user?: { name?: string | null; id?: number } | null }) {
+  const tiles = [
+    { id: "profile" as Section, icon: <UserRound size={26} />, label: "Profile", desc: "Your info", bg: "#dcfce7", fg: "#166534" },
+    { id: "crops" as Section, icon: <Sprout size={26} />, label: "My Crops", desc: "Manage crops", bg: "#d1fae5", fg: "#065f46" },
+    { id: "experts" as Section, icon: <Stethoscope size={26} />, label: "Experts", desc: "Get help", bg: "#dbeafe", fg: "#1e40af" },
+    { id: "stores" as Section, icon: <Store size={26} />, label: "Stores", desc: "Buy supplies", bg: "#fef3c7", fg: "#92400e" },
+    { id: "scans" as Section, icon: <FileSearch size={26} />, label: "All Scans", desc: "Detailed view", bg: "#f3e8ff", fg: "#6b21a8" },
+    { id: "cases" as Section, icon: <ClipboardList size={26} />, label: "Cases", desc: "Track issues", bg: "#fce7f3", fg: "#9d174d" },
+  ];
+
+  return (
+    <div className="page-stack">
+      <div className="admin-title">
+        <p className="eyebrow">MORE OPTIONS</p>
+        <h1>Menu</h1>
+      </div>
+
+      {/* User profile card */}
+      <button className="more-profile-card surface-card" type="button" onClick={() => go("profile")}>
+        <div className="avatar avatar-large">{getUserInitials(user?.name)}</div>
+        <div style={{ flex: 1, textAlign: 'left' }}>
+          <h3 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>{user?.name || "CropShield User"}</h3>
+          <p style={{ fontSize: '12px', color: 'var(--muted)', margin: '2px 0 0' }}>{role === "admin" ? "Administrator" : "Farmer"} · Tap to edit</p>
+        </div>
+        <ChevronRight size={18} style={{ color: 'var(--muted)' }} />
+      </button>
+
+      {/* Premium grid menu */}
+      <div className="more-grid">
+        {tiles.map(tile => (
+          <button key={tile.id} className="more-tile" type="button" onClick={() => go(tile.id)}>
+            <div className="more-tile-icon" style={{ background: tile.bg, color: tile.fg }}>{tile.icon}</div>
+            <span className="more-tile-label">{tile.label}</span>
+            <span className="more-tile-desc">{tile.desc}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Sign out */}
+      <button className="more-signout" type="button" onClick={() => { logout(); toast.success("Signed out"); }}>
+        <LogOut size={18} /> Sign out
+      </button>
+    </div>
+  );
+}
+
+function ScanHistory() {
+  const { data, isLoading, isError, refetch } = trpc.farmer.scans.useQuery();
+  const updateProgress = trpc.farmer.updateRecommendationProgress.useMutation();
+  const [progressByScan, setProgressByScan] = useState<Record<number, RecommendationProgress[]>>({});
+  const [query, setQuery] = useState("");
+  const [riskFilter, setRiskFilter] = useState<"all" | "low" | "medium" | "high" | "critical">("all");
+  const filtered = useMemo(() => (data ?? []).filter((scan) => {
+    const haystack = `${scan.disease ?? ""} ${scan.assessment ?? ""} ${scan.cropId ?? ""} ${scan.status}`.toLowerCase();
+    return (riskFilter === "all" || scan.riskLevel === riskFilter) && haystack.includes(query.trim().toLowerCase());
+  }), [data, query, riskFilter]);
+  const tone = (risk: string) => risk === "high" || risk === "critical" ? "danger" : risk === "medium" ? "neutral" : "mint";
+  const toggleProgress = async (scanId: number, current: RecommendationProgress[], index: number) => {
+    const next = current.map((item, itemIndex) => itemIndex === index ? { ...item, completed: !item.completed } : item);
+    setProgressByScan((previous) => ({ ...previous, [scanId]: next }));
+    try {
+      await updateProgress.mutateAsync({ scanId, progress: next });
+      toast.success(next[index]?.completed ? "Step saved as complete" : "Step moved back to pending");
+    } catch {
+      setProgressByScan((previous) => ({ ...previous, [scanId]: current }));
+      toast.error("Your progress could not be saved. Please try again.");
+    }
+  };
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">FIELD HISTORY</p><h1>Scan History</h1><p>Review assessments and continue the steps you started in the field.</p></div><section className="surface-card"><div className="history-toolbar"><div className="search-field"><Search size={17} /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search diagnosis, crop, or status" /></div><div className="tab-row history-filters"><button className={riskFilter === "all" ? "active" : ""} onClick={() => setRiskFilter("all")}>All</button><button className={riskFilter === "low" ? "active" : ""} onClick={() => setRiskFilter("low")}>Low</button><button className={riskFilter === "medium" ? "active" : ""} onClick={() => setRiskFilter("medium")}>Medium</button><button className={riskFilter === "high" ? "active" : ""} onClick={() => setRiskFilter("high")}>High</button><button className={riskFilter === "critical" ? "active" : ""} onClick={() => setRiskFilter("critical")}>Critical</button><Button variant="ghost" onClick={() => refetch()}><RefreshCw size={15} /> Refresh</Button></div></div>{isLoading ? <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Loading scan history…</p></div> : isError ? <EmptyState title="Scan history unavailable" detail="Your scan records could not be loaded." action={<Button onClick={() => refetch()}>Retry</Button>} /> : filtered.length ? <div className="activity-list history-list">{filtered.map((scan) => { const persistedProgress = progressByScan[scan.id] ?? parseRecommendationProgress(scan.recommendationProgress); const completed = persistedProgress.filter((item) => item.completed).length; return <details className="history-entry" key={scan.id}><summary><div className={`activity-icon ${tone(scan.riskLevel)}`}><FileSearch size={17} /></div><p><b>{scan.disease || (scan.cropId ? `Crop #${scan.cropId}` : "Crop scan")}</b><span>{scan.status} · {scan.riskLevel} risk · {scan.confidence ?? 0}% confidence</span><small>{new Date(scan.createdAt).toLocaleString()}</small></p><ChevronRight className="history-chevron" size={18} /></summary><div className="history-detail"><div><span className="eyebrow">ASSESSMENT</span><p>{scan.assessment || "No assessment summary was recorded."}</p></div><div><span className="eyebrow">OBSERVATIONS</span><p>{scan.symptoms ? (() => { try { return JSON.parse(scan.symptoms).join(" "); } catch { return scan.symptoms; } })() : "No observations recorded."}</p></div><div><span className="eyebrow">RECOMMENDED NEXT STEPS</span>{persistedProgress.length ? <div className="history-progress"><strong>{completed}/{persistedProgress.length} steps complete</strong>{persistedProgress.map((item, index) => <button type="button" className={`history-progress-step ${item.completed ? "complete" : "pending"}`} aria-pressed={item.completed} disabled={updateProgress.isPending} onClick={() => void toggleProgress(scan.id, persistedProgress, index)} key={item.step}>{item.completed ? "✓" : "○"} {item.step}</button>)}</div> : <p>{scan.recommendations ? (() => { try { return JSON.parse(scan.recommendations).join(" "); } catch { return scan.recommendations; } })() : "No recommendations recorded."}</p>}</div></div></details>; })}</div> : <EmptyState title={data?.length ? "No matching scans" : "No scans yet"} detail={data?.length ? "Try a different search term or risk filter." : "Start a crop scan to create your first health assessment."} action={data?.length ? undefined : <Button asChild><Link href="/farmer/scan">Start a scan</Link></Button>} />}</section></div>;
+}
+
+function ScanReview() {
+  const { data, isLoading, isError, refetch } = trpc.admin.overview.useQuery();
+  const scans = data?.recentScans ?? [];
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">REVIEW QUEUE</p><h1>Scan Review</h1><p>Review approved scan assessments and their risk classifications.</p></div><section className="surface-card">{isLoading ? <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Loading approved scans…</p></div> : isError ? <EmptyState title="Scans unavailable" detail="We could not load approved scan records." action={<Button onClick={() => refetch()}>Retry</Button>} /> : scans.length ? <div className="activity-list">{scans.map((scan) => <div key={scan.id}><div className={`activity-icon ${scan.riskLevel === "high" ? "danger" : "mint"}`}><FileSearch size={17} /></div><p><b>{scan.cropId ? `Crop #${scan.cropId}` : "Crop scan"}</b><span>{scan.riskLevel ?? "unknown"} risk · {scan.confidence ?? 0}% confidence</span><small>{new Date(scan.createdAt).toLocaleString()}</small></p></div>)}</div> : <EmptyState title="No approved scans" detail="Approved scan assessments will appear here after review." />}</section></div>;
+}
+
+function CaseList({ admin = false }: { admin?: boolean }) {
+  const utils = trpc.useUtils();
+  const farmerCases = trpc.farmer.cases.useQuery(undefined, { enabled: !admin });
+  const adminCases = trpc.admin.cases.useQuery(undefined, { enabled: admin });
+  const updateCase = trpc.farmer.updateCase.useMutation({ onSuccess: () => { utils.farmer.cases.invalidate(); utils.admin.cases.invalidate(); } });
+  const updateScanProgress = trpc.farmer.updateScanProgress.useMutation({ onSuccess: () => { utils.farmer.cases.invalidate(); utils.admin.cases.invalidate(); } });
+  const [caseFilter, setCaseFilter] = useState<"all" | "open" | "resolved">("all");
+  const [selectedCase, setSelectedCase] = useState<any>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  const rows = admin ? adminCases.data : farmerCases.data;
+  const loading = admin ? adminCases.isLoading : farmerCases.isLoading;
+  const error = admin ? adminCases.isError : farmerCases.isError;
+  const filteredRows = (rows ?? []).filter((item) => caseFilter === "all" || (caseFilter === "resolved" ? item.status === "resolved" : item.status !== "resolved"));
+
+  const handleNameSave = async () => {
+    if (!newName.trim() || newName.trim() === selectedCase.reference) {
+      setEditingName(false);
+      return;
+    }
+    await updateCase.mutateAsync({ id: selectedCase.id, reference: newName.trim() });
+    setSelectedCase({ ...selectedCase, reference: newName.trim() });
+    setEditingName(false);
+    toast.success("Case name updated");
+  };
+
+  const handleToggleStep = async (index: number) => {
+    const progress = parseRecommendationProgress(selectedCase.recommendationProgress);
+    progress[index].completed = !progress[index].completed;
+    const newProgressStr = JSON.stringify(progress);
+    setSelectedCase({ ...selectedCase, recommendationProgress: newProgressStr });
+    await updateScanProgress.mutateAsync({ scanId: selectedCase.scanId, progress: newProgressStr });
+  };
+
+  const handleToggleResolved = async () => {
+    const newStatus = selectedCase.status === "resolved" ? "open" : "resolved";
+    await updateCase.mutateAsync({ id: selectedCase.id, status: newStatus });
+    setSelectedCase({ ...selectedCase, status: newStatus });
+    toast.success(`Case marked as ${newStatus}`);
+  };
+
+  return (
+    <div className="page-stack">
+      <div className="admin-title">
+        <p className="eyebrow">{admin ? "REVIEW QUEUE" : "CASE MANAGEMENT"}</p>
+        <h1>{admin ? "Case Review" : "My Cases"}</h1>
+        <p>{admin ? "Review approved case records and follow up on high-risk findings." : "Review your crop assessments, recommendations, and follow-up progress."}</p>
+      </div>
+      <div className="tab-row">
+        <button className={caseFilter === "all" ? "active" : ""} onClick={() => setCaseFilter("all")}>All</button>
+        <button className={caseFilter === "open" ? "active" : ""} onClick={() => setCaseFilter("open")}>Open</button>
+        <button className={caseFilter === "resolved" ? "active" : ""} onClick={() => setCaseFilter("resolved")}>Resolved</button>
+      </div>
+      <section className="surface-card">
+        {loading ? <div className="empty-state"><RefreshCw className="spin" size={22} /><p>Loading cases…</p></div> : error ? <EmptyState title="Cases unavailable" detail="We could not load case records. Please try again." action={<Button onClick={() => (admin ? adminCases.refetch() : farmerCases.refetch())}>Retry</Button>} /> : filteredRows.length ? (
+          <div className="activity-list">
+            {filteredRows.map((item) => (
+              <div key={item.id} className="cursor-pointer hover:bg-slate-50 transition-colors" style={{ cursor: "pointer" }} onClick={() => { setSelectedCase(item); setNewName(item.reference); }}>
+                <div className={`activity-icon ${item.status === "resolved" ? "mint" : "danger"}`}><ClipboardList size={17} /></div>
+                <p>
+                  <b>{item.reference}</b>
+                  <span>{item.status === "resolved" ? "Resolved" : "Open case requiring follow-up"}</span>
+                  <small>
+                    {new Date(item.createdAt).toLocaleString()} · {(() => { const progress = parseRecommendationProgress(item.recommendationProgress); return progress.length ? `${progress.filter((step) => step.completed).length}/${progress.length} steps complete` : "No checklist yet"; })()}
+                  </small>
+                </p>
+                <ChevronRight size={16} style={{ marginLeft: "auto", color: "var(--subtle)" }} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <EmptyState title={rows?.length ? "No cases in this view" : admin ? "No approved cases" : "No cases yet"} detail={rows?.length ? "Choose another case filter to see more records." : admin ? "Approved case records will appear here after review." : "Run a crop scan to create your first case."} action={!admin && !rows?.length ? <Button asChild><Link href="/farmer/scan">Start a scan</Link></Button> : undefined} />
+        )}
+      </section>
+
+      <Dialog open={!!selectedCase} onOpenChange={(open) => { if (!open) { setSelectedCase(null); setEditingName(false); } }}>
+        <DialogContent style={{ maxWidth: 500, background: "var(--surface, #ffffff)", maxHeight: "90vh", overflowY: "auto" }}>
+          <DialogHeader>
+            <DialogTitle>Case Details</DialogTitle>
+          </DialogHeader>
+          {selectedCase && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+              {selectedCase.imageUrl && (
+                <div style={{ borderRadius: 8, overflow: "hidden", border: "1px solid var(--line)", background: "#000", display: "flex", justifyContent: "center" }}>
+                  <img src={selectedCase.imageUrl} alt="Crop Scan" style={{ maxHeight: 200, objectFit: "contain" }} />
+                </div>
+              )}
+              <div>
+                <span className="eyebrow">CASE REFERENCE</span>
+                {editingName ? (
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <Input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onBlur={handleNameSave} onKeyDown={e => e.key === 'Enter' && handleNameSave()} />
+                    <Button onClick={handleNameSave}>Save</Button>
+                  </div>
+                ) : (
+                  <h3 style={{ margin: "4px 0 0", display: "flex", alignItems: "center", gap: 8 }}>
+                    {selectedCase.reference}
+                    <button type="button" onClick={() => setEditingName(true)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--primary)", fontSize: 13 }}>Edit</button>
+                  </h3>
+                )}
+              </div>
+              
+              <div style={{ display: "flex", gap: 12, alignItems: "center", padding: "12px", background: selectedCase.status === "resolved" ? "var(--primary-mist)" : "var(--amber-light)", borderRadius: 8 }}>
+                 <div style={{ flex: 1 }}>
+                   <strong style={{ display: "block", color: "var(--ink)", fontSize: 14 }}>{selectedCase.status === "resolved" ? "Case Resolved" : "Open Case"}</strong>
+                   <span style={{ fontSize: 13, color: "var(--subtle)" }}>{selectedCase.status === "resolved" ? "All treatments completed." : "Requires follow-up."}</span>
+                 </div>
+                 {!admin && (
+                   <Button variant={selectedCase.status === "resolved" ? "outline" : "default"} onClick={handleToggleResolved}>
+                     {selectedCase.status === "resolved" ? "Reopen Case" : "Mark as Resolved"}
+                   </Button>
+                 )}
+              </div>
+
+              <div>
+                <span className="eyebrow">RECOMMENDED ACTION PLAN</span>
+                {(() => {
+                  const progress = parseRecommendationProgress(selectedCase.recommendationProgress);
+                  if (!progress.length) return <p style={{ fontSize: 14, color: "var(--subtle)" }}>No specific checklist generated for this case.</p>;
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 12 }}>
+                      {progress.map((item, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          onClick={() => !admin && handleToggleStep(index)}
+                          disabled={admin}
+                          style={{
+                            display: "flex",
+                            alignItems: "flex-start",
+                            gap: 12,
+                            padding: 12,
+                            background: item.completed ? "var(--surface)" : "#fff",
+                            border: `1px solid ${item.completed ? "var(--line)" : "var(--line)"}`,
+                            borderRadius: 8,
+                            textAlign: "left",
+                            cursor: admin ? "default" : "pointer",
+                            opacity: item.completed ? 0.7 : 1,
+                            transition: "all 0.2s ease"
+                          }}
+                        >
+                          <div style={{ 
+                            marginTop: 2,
+                            width: 20, 
+                            height: 20, 
+                            borderRadius: 4, 
+                            border: `2px solid ${item.completed ? "var(--primary)" : "#ccc"}`,
+                            background: item.completed ? "var(--primary)" : "transparent",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0
+                          }}>
+                            {item.completed && <Check size={14} color="#fff" />}
+                          </div>
+                          <span style={{ fontSize: 14, color: "var(--ink)", textDecoration: item.completed ? "line-through" : "none" }}>{item.step}</span>
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function SimpleList({ title, subtitle, admin = false }: { title: string; subtitle: string; admin?: boolean }) {
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">{admin ? "REVIEW QUEUE" : "CASE MANAGEMENT"}</p><h1>{title}</h1><p>{subtitle}</p></div><div className="tab-row"><button className="active">All</button><button>High Risk</button><button>Resolved</button></div><section className="surface-card"><EmptyState title="No additional records yet" detail="New approved records will appear here when activity is recorded in the system." action={admin ? <Button asChild><Link href="/admin/dashboard">Return to overview</Link></Button> : <Button asChild><Link href="/farmer/scan">Start a scan</Link></Button>} /></section></div>;
+}
+
+function LocalAuthPanel({ navigate, language }: { navigate: (path: string) => void; language: LanguageCode }) {
+  const t = (key: string) => translate(language, key);
+  const [mode, setMode] = useState<"signin" | "signup">("signup");
+  const [role, setRole] = useState<"user" | "admin">("user");
+  const [detailsStep, setDetailsStep] = useState(false);
+  const [form, setForm] = useState({ name: "", email: "", password: "", phone: "", region: "", state: "", district: "", pinCode: "", village: "", town: "", primaryCrop: "", farmingExperienceYears: "", latitude: "", longitude: "" });
+  const [gpsState, setGpsState] = useState<"idle" | "detecting" | "saved" | "denied">("idle");
+  const [signupGeocoderReady, setSignupGeocoderReady] = useState(false);
+  const [error, setError] = useState("");
+  const utils = trpc.useUtils();
+  const signin = trpc.auth.signin.useMutation();
+  const signup = trpc.auth.signup.useMutation();
+  const busy = signin.isPending || signup.isPending;
+  const set = (field: keyof typeof form) => (event: React.ChangeEvent<HTMLInputElement>) => setForm((current) => ({ ...current, [field]: event.target.value }));
+  const signupGeocodeKey = useRef("");
+  const reverseGeocodeSignup = (latitude: number, longitude: number) => {
+    const key = `${latitude.toFixed(6)}:${longitude.toFixed(6)}`;
+    signupGeocodeKey.current = key;
+    if (window.google?.maps) {
+      new google.maps.Geocoder().geocode({ location: { lat: latitude, lng: longitude } }, (results, status) => {
+        if (status !== "OK" || !results?.[0]) return;
+        setForm((current) => ({ ...current, ...mapGeocodedAddress(results[0].formatted_address, results[0].address_components, current) }));
+        setGpsState("saved");
+        toast.success("GPS location captured and address fields filled.");
+      });
+    } else {
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`)
+        .then(res => res.ok ? res.json() : null)
+        .then(data => {
+          if (!data?.address) return;
+          const a = data.address;
+          setForm(current => ({ ...current, region: data.display_name || "", state: a.state || current.state || "", district: a.county || a.state_district || current.district || "", pinCode: a.postcode || current.pinCode || "", village: a.village || current.village || "", town: a.city || a.town || current.town || "" }));
+          setGpsState("saved");
+          toast.success("GPS location captured and address fields filled.");
+        }).catch(() => {});
+    }
+    return true;
+  };
+  const detectSignupLocation = () => {
+    if (!navigator.geolocation) { setGpsState("denied"); return; }
+    setGpsState("detecting");
+    navigator.geolocation.getCurrentPosition((position) => {
+      const latitude = position.coords.latitude;
+      const longitude = position.coords.longitude;
+      setForm((current) => ({ ...current, latitude: latitude.toFixed(6), longitude: longitude.toFixed(6) }));
+      if (!reverseGeocodeSignup(latitude, longitude)) toast.success("GPS location captured. Address fields will fill when the map service is ready.");
+      else setGpsState("saved");
+    }, () => {
+      setGpsState("denied");
+      toast.info("GPS was unavailable. You can enter your address manually.");
+    }, { enableHighAccuracy: false, timeout: 8000 });
+  };
+  useEffect(() => {
+    if (mode !== "signup" || role !== "user" || !signupGeocoderReady || !form.latitude || !form.longitude || !window.google?.maps) return;
+    const latitude = Number(form.latitude);
+    const longitude = Number(form.longitude);
+    const key = `${latitude.toFixed(6)}:${longitude.toFixed(6)}`;
+    if (signupGeocodeKey.current === key) return;
+    reverseGeocodeSignup(latitude, longitude);
+  }, [form.latitude, form.longitude, mode, role, signupGeocoderReady]);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setError("");
+    try {
+      const result = mode === "signin" ? await signin.mutateAsync({ email: form.email, password: form.password }) : await signup.mutateAsync({ ...form, role, farmingExperienceYears: form.farmingExperienceYears ? Number(form.farmingExperienceYears) : undefined, latitude: form.latitude ? Number(form.latitude) : undefined, longitude: form.longitude ? Number(form.longitude) : undefined });
+      try { sessionStorage.setItem("cropshield-local-session", result.sessionToken); } catch {}
+      await utils.auth.me.invalidate();
+      navigate(result.user.role === "admin" ? "/admin/dashboard" : "/farmer/dashboard");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The account action could not be completed.");
+    }
+  };
+  const bypassLogin = async (roleType: "user" | "admin") => {
+    setError("");
+    try {
+      const randomName = roleType === "admin" ? "Test Admin" : "Test Farmer";
+      const randomEmail = `test-${roleType}-${Date.now()}@example.com`;
+      const result = await signup.mutateAsync({
+        name: randomName,
+        email: randomEmail,
+        password: "password123",
+        role: roleType,
+        region: "Test Region",
+        state: "Test State",
+        district: "Test District"
+      });
+      try { sessionStorage.setItem("cropshield-local-session", result.sessionToken); } catch {}
+      await utils.auth.me.invalidate();
+      navigate(result.user.role === "admin" ? "/admin/dashboard" : "/farmer/dashboard");
+    } catch (cause) {
+      setError("Bypass failed: " + (cause instanceof Error ? cause.message : "Unknown error"));
+    }
+  };
+  const chooseRole = (nextRole: "user" | "admin") => { setRole(nextRole); setError(""); setDetailsStep(true); };
+  const roleName = role === "admin" ? "Administrator" : "Farmer";
+  if (mode === "signup" && !detailsStep) return <section className="login-card role-choice-card"><div className="login-icon"><ShieldCheck size={24} /></div><h2>Select your workspace</h2><p>Choose your role to customize your CropShield experience.</p><div style={{ display: "grid", gap: "8px", marginTop: "16px" }}><Button style={{ width: "100%", minHeight: "48px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }} onClick={() => bypassLogin("user")} variant="outline" type="button"><Sprout size={18} /> Quick Farmer Login</Button><Button style={{ width: "100%", minHeight: "48px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px" }} onClick={() => bypassLogin("admin")} variant="outline" type="button"><UserRoundCog size={18} /> Quick Admin Login</Button></div><div style={{ display: "flex", alignItems: "center", gap: "12px", margin: "18px 0 8px", color: "#9ca3af", fontSize: "12px" }}><span style={{ flex: 1, height: "1px", background: "#e5e7eb" }} /><span>or create an account</span><span style={{ flex: 1, height: "1px", background: "#e5e7eb" }} /></div><div className="role-choice-list">{LOCAL_SIGNUP_ROLES.map((option) => <button className="role-choice" type="button" key={option.value} onClick={() => chooseRole(option.value)}><span className="role-choice-icon">{option.value === "admin" ? <UserRoundCog size={20} /> : <Sprout size={20} />}</span><span><b>{option.value === "admin" ? "Administrator" : "Farmer"}</b><small>{option.value === "admin" ? "Manage approvals, farmers, and field services" : "Monitor crops, scan images, and track cases"}</small></span><ChevronRight size={18} /></button>)}</div>{error && <p className="auth-error" role="alert">{error}</p>}<button className="auth-switch" type="button" onClick={() => { setMode("signin"); setDetailsStep(true); setError(""); }}>Already have an account? Sign in</button></section>;
+  return <section className="login-card details-card">{mode === "signup" && role === "user" && <MapView className="signup-geocoder-map" onMapReady={() => setSignupGeocoderReady(true)} initialCenter={{ lat: 20.5937, lng: 78.9629 }} initialZoom={4} />}<button className="back-link auth-back" type="button" onClick={() => { if (mode === "signup") setDetailsStep(false); else { setMode("signup"); setDetailsStep(false); } }}>← {mode === "signup" ? "Change workspace" : "Create a test account"}</button><div className="login-icon"><ShieldCheck size={24} /></div><p className="eyebrow">{mode === "signin" ? "LOCAL TEST ACCESS" : `${roleName.toUpperCase()} SETUP`}</p><h2>{mode === "signin" ? t("signIn") : `Set up your ${roleName.toLowerCase()} workspace`}</h2><p>{mode === "signin" ? "Use an account saved in this test application's database." : role === "admin" ? "Administrator access is reserved for the configured owner account." : "Add the essentials now. You can complete your profile later."}</p><form className="auth-form" onSubmit={submit}>{mode === "signup" && <><div className="selected-role"><span className="role-choice-icon">{role === "admin" ? <UserRoundCog size={17} /> : <Sprout size={17} />}</span><div><small>WORKSPACE</small><b>{roleName}</b></div></div><label>Full name<Input required value={form.name} onChange={set("name")} placeholder="Your name" autoComplete="name" /></label>{role === "user" && <><label>Primary crop<Input required value={form.primaryCrop} onChange={set("primaryCrop")} placeholder="e.g. rice, wheat, tomato" /></label><div className="auth-grid compact-fields"><label>State<Input required value={form.state} onChange={set("state")} placeholder="State" /></label><label>District<Input required value={form.district} onChange={set("district")} placeholder="District" /></label></div><div className="signup-location-actions"><Button type="button" variant="outline" onClick={detectSignupLocation} disabled={gpsState === "detecting"}><MapPin size={16} /> {gpsState === "detecting" ? "Detecting location…" : gpsState === "saved" ? "GPS location captured" : "Use my GPS location"}</Button><span>{gpsState === "saved" ? formatGpsLabel(form.latitude, form.longitude) : "Optional: use GPS to save your coordinates"}</span></div><label>Address <span className="optional-label">auto-filled from GPS</span><Input value={form.region} onChange={set("region")} placeholder="Street, village, or local address" /></label><div className="auth-grid compact-fields"><label>PIN code <span className="optional-label">optional</span><Input value={form.pinCode} onChange={set("pinCode")} placeholder="PIN code" inputMode="numeric" /></label><label>Village <span className="optional-label">optional</span><Input value={form.village} onChange={set("village")} placeholder="Village" /></label><label>Town <span className="optional-label">optional</span><Input value={form.town} onChange={set("town")} placeholder="Town" /></label></div></>}<label>Phone <span className="optional-label">optional</span><Input value={form.phone} onChange={set("phone")} placeholder="Phone number" autoComplete="tel" /></label></>}{mode === "signin" && <label>Email<Input required type="email" value={form.email} onChange={set("email")} placeholder="you@example.com" autoComplete="email" /></label>}{mode === "signup" && <label>Email<Input required type="email" value={form.email} onChange={set("email")} placeholder="you@example.com" autoComplete="email" /></label>}<label>Password<Input required type="password" minLength={mode === "signup" ? 8 : 1} value={form.password} onChange={set("password")} placeholder={mode === "signup" ? "At least 8 characters" : "Your password"} autoComplete={mode === "signup" ? "new-password" : "current-password"} /></label>{error && <p className="auth-error" role="alert">{error}</p>}<Button className="login-button" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "signin" ? t("signIn") : `${t("create")} ${roleName.toLowerCase()}`} <ArrowRight size={17} /></Button></form><button className="auth-switch" type="button" onClick={() => { if (mode === "signin") { setMode("signup"); setDetailsStep(false); } else { setMode("signin"); setDetailsStep(true); } setError(""); }}>{mode === "signin" ? "Need a test account? Sign up" : "Already have an account? Sign in"}</button></section>;
+}
+
+function Profile({ role, logout, userId, userName }: { role: Role; logout: () => void; userId?: number; userName?: string | null }) {
+  const snapshot = trpc.farmer.snapshot.useQuery(undefined, { enabled: Boolean(userId) });
+  const [displayName, setDisplayName] = useState(userName || (role === "admin" ? "System Administrator" : "Farmer"));
+  const [region, setRegion] = useState(""); const [state, setState] = useState(""); const [district, setDistrict] = useState(""); const [pinCode, setPinCode] = useState(""); const [village, setVillage] = useState(""); const [town, setTown] = useState(""); const [latitude, setLatitude] = useState(""); const [longitude, setLongitude] = useState(""); const [gpsState, setGpsState] = useState<"idle" | "detecting" | "denied" | "saved">("idle");
+  const applyCoordinates = (lat: number, lng: number) => { setLatitude(lat.toFixed(6)); setLongitude(lng.toFixed(6)); setGpsState("saved"); if (window.google?.maps) { new google.maps.Geocoder().geocode({ location: { lat, lng } }, (results, status) => { if (status !== "OK" || !results?.[0]) return; const values = new Map<string, string>(); results[0].address_components.forEach((part) => part.types.forEach((type) => values.set(type, part.long_name))); setRegion(results[0].formatted_address); setState(values.get("administrative_area_level_1") ?? ""); setDistrict(values.get("administrative_area_level_2") ?? values.get("administrative_area_level_3") ?? ""); setPinCode(values.get("postal_code") ?? ""); setVillage(values.get("sublocality_level_1") ?? values.get("administrative_area_level_3") ?? ""); setTown(values.get("postal_town") ?? values.get("locality") ?? ""); }); } else { fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`).then(res => res.ok ? res.json() : null).then(data => { if (!data?.address) return; const a = data.address; setRegion(data.display_name || ""); setState(a.state || ""); setDistrict(a.county || a.state_district || ""); setPinCode(a.postcode || ""); setVillage(a.village || ""); setTown(a.city || a.town || ""); }).catch(() => {}); } };
+  useEffect(() => { if (snapshot.data?.profile) { setDisplayName(snapshot.data.profile.displayName); setRegion(snapshot.data.profile.region ?? ""); setState(snapshot.data.profile.state ?? ""); setDistrict(snapshot.data.profile.district ?? ""); setPinCode(snapshot.data.profile.pinCode ?? ""); setVillage(snapshot.data.profile.village ?? ""); setTown(snapshot.data.profile.town ?? ""); setLatitude(String(snapshot.data.profile.latitude ?? "")); setLongitude(String(snapshot.data.profile.longitude ?? "")); } else if (userName) setDisplayName(userName); }, [snapshot.data?.profile, userName]);
+  const update = trpc.farmer.updateProfile.useMutation();
+  if (role === "farmer" && snapshot.isError) return <div className="page-stack"><EmptyState title="Profile unavailable" detail="Your saved profile could not be loaded." action={<Button onClick={() => snapshot.refetch()}>Retry</Button>} /></div>;
+  return <div className="page-stack"><div className="admin-title"><p className="eyebrow">ACCOUNT</p><h1>Profile</h1><p>Manage your CropShield identity and notification preferences.</p></div><section className="surface-card profile-card"><div className="profile-header"><div className="avatar avatar-large">{getUserInitials(displayName)}</div><div><h2>{displayName}</h2><p>{role === "admin" ? "Administrator" : "Farmer"}</p></div></div><label>Display name<Input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></label>{role === "admin" && <div className="admin-profile-note"><ShieldCheck size={18} /><div><b>Administrator workspace</b><p>Manage approvals, review crop cases, and maintain verified service directories.</p></div></div>}{role === "farmer" && <><label>Region<Input value={region} onChange={(e) => setRegion(e.target.value)} placeholder="Add your operating region" /></label><div className="location-actions"><Button type="button" variant="outline" onClick={() => { if (!navigator.geolocation) { setGpsState("denied"); return; } setGpsState("detecting"); navigator.geolocation.getCurrentPosition((position) => { applyCoordinates(position.coords.latitude, position.coords.longitude); toast.success("GPS location captured and address fields filled; save your profile to persist them."); }, () => { setGpsState("denied"); toast.info("GPS was unavailable. Enter state, district, PIN, and village manually."); }, { enableHighAccuracy: false, timeout: 8000 }); }}>{gpsState === "detecting" ? "Detecting…" : "Use my GPS location"}</Button>{gpsState === "denied" && <small>GPS permission was unavailable. Manual location fields below are the fallback.</small>}</div><div className="location-fields"><label>State<Input value={state} onChange={(e) => setState(e.target.value)} placeholder="State" /></label><label>District<Input value={district} onChange={(e) => setDistrict(e.target.value)} placeholder="District" /></label><label>PIN code<Input value={pinCode} onChange={(e) => setPinCode(e.target.value)} placeholder="PIN code" inputMode="numeric" /></label><label>Village<Input value={village} onChange={(e) => setVillage(e.target.value)} placeholder="Optional village" /></label><label>Town<Input value={town} onChange={(e) => setTown(e.target.value)} placeholder="Optional town" /></label></div><div className="profile-location-map"><div className="section-heading"><div><p className="eyebrow">EXACT FIELD LOCATION</p><h2>Pin your farm on the map</h2></div><MapPin size={18} /></div><p className="map-help">Use GPS or tap the map to place the pin. You can still edit the fields manually.</p><MapView key={`${latitude}:${longitude}`} initialCenter={latitude && longitude ? { lat: Number(latitude), lng: Number(longitude) } : { lat: 20.5937, lng: 78.9629 }} initialZoom={latitude && longitude ? 14 : 4} onMapReady={(map) => { map.setMapTypeId("hybrid"); if (latitude && longitude) new google.maps.Marker({ map, position: { lat: Number(latitude), lng: Number(longitude) }, title: "Saved farm location" }); map.addListener("click", (event: google.maps.MapMouseEvent) => { if (event.latLng) applyCoordinates(event.latLng.lat(), event.latLng.lng()); }); }} /></div></>}<label>Role<Input value={role} readOnly /></label>{userId && <Button disabled={update.isPending} onClick={async () => { try { await update.mutateAsync({ displayName, region, state, district, pinCode, village, town, latitude: latitude ? Number(latitude) : undefined, longitude: longitude ? Number(longitude) : undefined }); toast.success("Profile saved"); } catch { toast.error("Profile could not be saved"); } }}>{update.isPending ? "Saving…" : "Save profile"}</Button>}<Button onClick={() => { logout(); toast.success("You have been signed out"); }} variant="outline"><LogOut size={17} /> Sign out</Button></section></div>;
+}
+
+export default function Home() {
+  const { user, loading, isAuthenticated, logout } = useAuth();
+  const [location, navigate] = useLocation();
+  const [scanDone, setScanDone] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const [language, setLanguage] = useState<LanguageCode>(() => getStoredLanguage());
+  const createCase = trpc.cases.create.useMutation();
+  const role: Role = user?.role === "admin" ? "admin" : "farmer";
+  const section = useMemo(() => getSection(location), [location]);
+  const mobileNavItems = nav.filter((item) => item.roles.includes(role));
+  const primaryMobileIds = getPrimaryMobileSectionIds(role);
+  const primaryMobileItems = mobileNavItems.filter((item) => primaryMobileIds.includes(item.id));
+  const secondaryMobileItems = mobileNavItems.filter((item) => !primaryMobileIds.includes(item.id));
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setProfileMenuOpen(false);
+      }
+    };
+    if (profileMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [profileMenuOpen]);
+
+  useEffect(() => { if (!user) return; const intendedRole: Role = user.role === "admin" ? "admin" : "farmer"; const isAdminPath = location.startsWith("/admin"); if ((intendedRole === "admin") !== isAdminPath && location !== "/") navigate(`/${intendedRole}/dashboard`); }, [location, navigate, user]);
+  useEffect(() => { if (!loading && !user && location !== "/") navigate("/"); }, [loading, location, navigate, user]);
+  useEffect(() => { setStoredLanguage(language); }, [language]);
+  const t = (key: string) => translate(language, key);
+  if (loading) return <AppLoadingScreen message="Loading your crop monitoring workspace…" />;
+  if (!isAuthenticated && !user) return <main className="login-page"><div className="login-brand"><Logo /><span>CROP HEALTH MONITOR</span><label className="language-picker login-language"><span className="sr-only">{t("language")}</span><select aria-label={t("language")} value={language} onChange={(event) => setLanguage(event.target.value as LanguageCode)}>{SUPPORTED_LANGUAGES.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}</select></label></div><div className="login-layout"><div className="login-copy"><h1>Know your crops.<br /><span>Grow with confidence.</span></h1><p>CropShield brings intelligent crop monitoring and actionable field data into one seamless workspace — powered by AI analysis and real-time weather insights.</p><div className="login-trust"><ShieldCheck size={20} /><span>Secure · AI-powered · Field-ready</span></div></div><LocalAuthPanel navigate={navigate} language={language} /></div><footer><Leaf size={14} /><span>CropShield · Built for farmers, by farmers</span></footer></main>;
+  const go = (id: Section) => navigate(`/${role}/${id}`);
+  const content = role === "admin" ? (section === "dashboard" ? <AdminDashboard isLive={Boolean(user)} /> : section === "farmers" ? <Directory /> : section === "analytics" ? <Analytics /> : section === "profile" ? <Profile role={role} logout={logout} userId={user?.id} userName={user?.name} /> : section === "scans" ? <ScanReview /> : section === "experts" ? <ExpertsPage admin /> : section === "stores" ? <StoresPage admin /> : section === "cases" ? <CaseList admin /> : section === "more" ? <MorePage go={go} logout={logout} role={role} user={user} /> : <SimpleList admin title="Review Queue" subtitle="Review approved records and follow up on high-risk findings." />) : (section === "dashboard" ? <FarmerDashboard onScan={() => go("scan")} user={user} /> : section === "scan" ? <ScanFlow canAnalyze={Boolean(user)} onComplete={async (scanId) => { if (!user) { toast.error("Sign in to save a case."); return; } try { await createCase.mutateAsync({ scanId, reference: `CS-${Date.now().toString().slice(-6)}` }); setScanDone(true); go("history"); toast.success("Scan saved!"); } catch { toast.error("The scan was analyzed, but the case could not be saved."); } }} /> : section === "crops" ? <CropList /> : section === "scans" ? <ScanHistory /> : section === "history" ? <HistoryPage /> : section === "more" ? <MorePage go={go} logout={logout} role={role} user={user} /> : section === "risks" ? <RiskAlertsPage /> : section === "experts" ? <ExpertsPage /> : section === "stores" ? <StoresPage /> : section === "profile" ? <Profile role={role} logout={logout} userId={user?.id} userName={user?.name} /> : <CaseList />);
+
+  return (
+    <main className="app-shell">
+      {/* Slide-out Mobile Navigation Drawer */}
+      {role === "admin" && mobileMenuOpen && (
+        <div className="mobile-drawer-backdrop" onClick={() => setMobileMenuOpen(false)}>
+          <div className="mobile-drawer-panel" onClick={(e) => e.stopPropagation()}>
+            <div className="mobile-drawer-header">
+              <Logo compact />
+              <button
+                type="button"
+                className="mobile-drawer-close"
+                onClick={() => setMobileMenuOpen(false)}
+                aria-label="Close navigation menu"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* User Profile Banner in Drawer */}
+            <div
+              className="mobile-drawer-profile"
+              onClick={() => {
+                setMobileMenuOpen(false);
+                go("profile");
+              }}
+            >
+              <div className="avatar avatar-medium">{getUserInitials(user?.name)}</div>
+              <div className="min-w-0 flex-1">
+                <h4 className="text-sm font-bold text-neutral-900 truncate">{user?.name || "CropShield User"}</h4>
+                <span className="text-[11px] text-emerald-700 font-semibold">
+                  {role === "admin" ? "Administrator" : "Farmer"} · Manage profile
+                </span>
+              </div>
+              <ChevronRight size={16} className="text-neutral-400" />
+            </div>
+
+            {/* Drawer Navigation Links */}
+            <div className="mobile-drawer-links">
+              {nav
+                .filter((item) => item.roles.includes(role))
+                .map((item) => {
+                  const isActive = section === item.id;
+                  return (
+                    <button
+                      type="button"
+                      key={item.id}
+                      className={`mobile-drawer-link${isActive ? " active" : ""}`}
+                      onClick={() => {
+                        setMobileMenuOpen(false);
+                        go(item.id);
+                      }}
+                    >
+                      <item.icon size={19} className={isActive ? "text-emerald-700" : "text-neutral-500"} />
+                      <span>{item.id === "dashboard" ? t("home") : t(item.id)}</span>
+                      {isActive && <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 ml-auto" />}
+                    </button>
+                  );
+                })}
+            </div>
+
+            {/* Drawer Sign Out Footer */}
+            <div className="mobile-drawer-footer">
+              <button
+                type="button"
+                className="mobile-drawer-signout"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  logout();
+                  toast.success("Signed out successfully");
+                }}
+              >
+                <LogOut size={18} />
+                <span>Sign out</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Desktop Sidebar */}
+      <aside className="desktop-sidebar">
+        <Logo />
+        <nav>
+          {nav
+            .filter((item) => item.roles.includes(role))
+            .map((item) => (
+              <button
+                className={section === item.id ? "active" : ""}
+                key={item.id}
+                onClick={() => go(item.id)}
+              >
+                <item.icon size={19} />
+                {t(item.id)}
+              </button>
+            ))}
+        </nav>
+        <div className="sidebar-footer">
+          <button className="sign-out" onClick={logout}>
+            <LogOut size={17} /> Sign out
+          </button>
+        </div>
+      </aside>
+
+      <div className="app-content">
+        <header className="topbar">
+          {/* Header Left Corner: Menu Button (admin only) + Logo */}
+          <div className="topbar-left">
+            {role === "admin" && (
+              <button
+                type="button"
+                className="topbar-menu-button"
+                onClick={() => setMobileMenuOpen(true)}
+                aria-label="Open navigation menu"
+                title="Menu"
+              >
+                <Menu size={22} />
+              </button>
+            )}
+            <Logo compact />
+          </div>
+
+          <div className="topbar-actions">
+            <label className="language-picker">
+              <span className="sr-only">{t("language")}</span>
+              <select
+                aria-label={t("language")}
+                value={language}
+                onChange={(event) => setLanguage(event.target.value as LanguageCode)}
+              >
+                {SUPPORTED_LANGUAGES.map((option) => (
+                  <option key={option.code} value={option.code}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <NetworkMode />
+            <button
+              aria-label="Notifications"
+              onClick={() => toast.info("Notifications are shown here when a new approved alert is available.")}
+            >
+              <Bell size={20} />
+            </button>
+
+            {/* Functional Profile Avatar Button & Popover */}
+            <div className="relative" ref={profileMenuRef}>
+              <button
+                type="button"
+                className="avatar-button"
+                onClick={() => setProfileMenuOpen((prev) => !prev)}
+                aria-label="User profile menu"
+                title={user?.name || "Profile menu"}
+              >
+                <div className="avatar avatar-small avatar-ring">
+                  {getUserInitials(user?.name)}
+                </div>
+              </button>
+
+              {profileMenuOpen && (
+                <div className="profile-popup">
+                  {/* Header Card */}
+                  <div className="profile-popup-header">
+                    <div className="avatar avatar-medium">{getUserInitials(user?.name)}</div>
+                    <div className="profile-popup-identity">
+                      <strong>{user?.name || (role === "admin" ? "Administrator" : "Farmer")}</strong>
+                      <span className="profile-popup-role-badge">
+                        {role === "admin" ? "Admin" : "Farmer"}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Divider */}
+                  <div className="profile-popup-divider" />
+
+                  {/* Menu Items */}
+                  <div className="profile-popup-actions">
+                    <button
+                      type="button"
+                      className="profile-popup-action"
+                      onClick={() => { setProfileMenuOpen(false); go("profile"); }}
+                    >
+                      <CircleUserRound size={17} />
+                      <span>Manage Profile</span>
+                      <ChevronRight size={14} className="profile-popup-action-arrow" />
+                    </button>
+                    <button
+                      type="button"
+                      className="profile-popup-action"
+                      onClick={() => { setProfileMenuOpen(false); toast.info("Settings panel coming soon."); }}
+                    >
+                      <Gauge size={17} />
+                      <span>Settings</span>
+                      <ChevronRight size={14} className="profile-popup-action-arrow" />
+                    </button>
+                  </div>
+
+                  <div className="profile-popup-divider" />
+
+                  <div className="profile-popup-actions">
+                    <button
+                      type="button"
+                      className="profile-popup-action profile-popup-action-danger"
+                      onClick={() => { setProfileMenuOpen(false); logout(); toast.success("Signed out successfully"); }}
+                    >
+                      <LogOut size={17} />
+                      <span>Sign out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <div className="content-inner">{content}</div>
+      </div>
+
+      <nav className="mobile-nav">
+        {primaryMobileItems.slice(0, 2).map((item) => (
+          <button
+            className={`mobile-nav-item${section === item.id ? " active" : ""}`}
+            key={item.id}
+            onClick={() => {
+              setMobileMenuOpen(false);
+              go(item.id);
+            }}
+          >
+            <span className="mobile-nav-icon">
+              <item.icon size={22} />
+            </span>
+            <span className="mobile-nav-label">{item.label}</span>
+          </button>
+        ))}
+        {role === "farmer" && (
+          <button
+            className={`mobile-scan${section === "scan" ? " active" : ""}`}
+            aria-label="Scan a crop"
+            onClick={() => {
+              setMobileMenuOpen(false);
+              go("scan");
+            }}
+          >
+            <span className="mobile-nav-icon">
+              <Camera size={20} />
+            </span>
+            <span className="mobile-nav-label">Scan</span>
+          </button>
+        )}
+        {primaryMobileItems.slice(2).map((item) => (
+          <button
+            className={`mobile-nav-item${section === item.id ? " active" : ""}`}
+            key={item.id}
+            onClick={() => {
+              setMobileMenuOpen(false);
+              go(item.id);
+            }}
+          >
+            <span className="mobile-nav-icon">
+              <item.icon size={22} />
+            </span>
+            <span className="mobile-nav-label">{item.label}</span>
+          </button>
+        ))}
+      </nav>
+    </main>
+  );
+}
