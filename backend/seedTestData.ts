@@ -10,6 +10,7 @@ const INDIAN_LOCATIONS = [
   { state: "Andhra Pradesh", districts: ["Guntur", "Krishna", "Kurnool", "Anantapur"], lat: 16.3067, lng: 80.4365 },
   { state: "Madhya Pradesh", districts: ["Bhopal", "Indore", "Jabalpur", "Gwalior"], lat: 23.2599, lng: 77.4126 },
   { state: "Rajasthan", districts: ["Jaipur", "Jodhpur", "Udaipur", "Kota"], lat: 26.9124, lng: 75.7873 },
+  { state: "Assam", districts: ["Guwahati", "Dibrugarh", "Jorhat", "Tezpur"], lat: 26.1445, lng: 91.7362 },
 ];
 
 const CROP_TYPES = ["Rice", "Wheat", "Cotton", "Tomato", "Potato", "Sugarcane", "Maize", "Soybean", "Groundnut", "Grapes", "Mango", "Onion", "Chilli", "Banana", "Mustard"];
@@ -19,7 +20,7 @@ const EXPERT_NAMES = ["Dr. Ramesh Patel", "Dr. Sunita Sharma", "Dr. Anil Kumar",
 const EXPERT_SPECS = ["Plant Pathology", "Entomology", "Soil Science", "Crop Science", "Integrated Pest Management"];
 const STORE_NAMES = ["AgroChem Solutions", "Kisan Agro Store", "Green Fields Pesticides", "Rural Agri Center", "FarmCare Supplies"];
 
-function randomPick<T>(arr: readonly T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
+function randomPick<T>(arr: T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
 function randomInt(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 function randomFloat(base: number, range: number) { return +(base + (Math.random() - 0.5) * range).toFixed(6); }
 
@@ -82,7 +83,7 @@ export async function seedTestData(): Promise<{ farmers: number; scans: number; 
       // Create 2-6 scans per farmer
       const numScans = randomInt(2, 6);
       for (let s = 0; s < numScans; s++) {
-        const riskLevel = randomPick(RISK_LEVELS) as "low" | "medium" | "high" | "critical" | "unknown";
+        const riskLevel = randomPick(RISK_LEVELS);
         const disease = randomPick(DISEASES);
         const confidence = randomInt(45, 95);
         const daysAgo = randomInt(0, 30);
@@ -136,13 +137,6 @@ export async function seedTestData(): Promise<{ farmers: number; scans: number; 
         preventiveActions: ["Improve air circulation", "Avoid overhead irrigation", "Inspect leaves regularly"],
         factors: [{ factor: "High humidity", contribution: riskScore, description: "Current humidity levels favor pathogen growth." }],
       }),
-      weatherSnapshot: JSON.stringify({
-        temperature: randomInt(20, 32),
-        humidity: randomInt(70, 95),
-        precipitation: randomFloat(2, 10),
-        windSpeed: randomInt(5, 25),
-        conditions: riskScore >= 55 ? "Warm and humid — favorable for fungal pathogens" : "Moderate conditions — routine monitoring advised",
-      }),
       validUntil,
       createdAt,
     }).returning({ id: riskPredictions.id });
@@ -158,7 +152,7 @@ export async function seedTestData(): Promise<{ farmers: number; scans: number; 
   }
 
   // Create ~10 regional outbreaks across different states
-  const outbreakStates = INDIAN_LOCATIONS.sort(() => Math.random() - 0.5).slice(0, 5);
+  const outbreakStates = INDIAN_LOCATIONS;
   for (const loc of outbreakStates) {
     const numOutbreaks = randomInt(1, 3);
     for (let o = 0; o < numOutbreaks; o++) {

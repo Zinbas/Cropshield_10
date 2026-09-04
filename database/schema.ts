@@ -20,8 +20,6 @@ export const users = pgTable("users", {
   passwordHash: varchar("passwordHash", { length: 255 }),
   role: roleEnum("role").default("user").notNull(),
   accountStatus: accountStatusEnum("accountStatus").default("active").notNull(),
-  assignedState: varchar("assignedState", { length: 100 }),
-  assignedDistrict: varchar("assignedDistrict", { length: 100 }),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().notNull(),
   lastSignedIn: timestamp("lastSignedIn").defaultNow().notNull(),

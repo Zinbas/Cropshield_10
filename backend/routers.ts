@@ -5,7 +5,7 @@ import { systemRouter } from "./_core/systemRouter";
 import { invokeLLM } from "./_core/llm";
 import { notifyOwner } from "./_core/notification";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan, updateCase, updateScanProgress, getActiveRiskPredictions, getRiskPredictionHistory, dismissRiskPrediction, insertRiskPrediction, insertAlertHistory, updateAlertFeedback, getActiveOutbreaks, getAllOutbreaks, resolveOutbreak, escalateOutbreak, upsertRegionalOutbreak, getRiskPredictionStats, getTerritoryRiskData } from "./db";
+import { approveScan, countAdmins, createCase, createCrop, createDrugStore, createExpert, createLocalUser, getAdminDrugStores, getAdminExperts, getAdminFarmerInsights, getAdminLocationSummaries, getAdminOverview, getApprovedCases, getApprovedDirectory, getApprovedDrugStores, getFarmerSnapshot, getOwnerCases, getOwnerCrops, getOwnerScans, getUserByEmail, getVerifiedExperts, insertScan, setDrugStoreStatus, setExpertStatus, setFarmerAccountStatus, deleteFarmerAccount, updateLastSignedIn, updateProfile, updateScan, updateCase, updateScanProgress, getActiveRiskPredictions, getRiskPredictionHistory, dismissRiskPrediction, insertRiskPrediction, insertAlertHistory, updateAlertFeedback, getActiveOutbreaks, getAllOutbreaks, resolveOutbreak, escalateOutbreak, upsertRegionalOutbreak, getRiskPredictionStats } from "./db";
 import { calculateFullRisk, detectRegionalOutbreaks, shouldEscalateToOfficer, type WeatherForecast } from "./riskEngine";
 import { seedTestData } from "./seedTestData";
 import { storagePut } from "./storage";
@@ -34,8 +34,7 @@ export async function fetchOpenMeteoWeather(latitude: number, longitude: number,
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new Error("Administrator access required");
-  const territory = { state: ctx.user.assignedState ?? null, district: ctx.user.assignedDistrict ?? null };
-  return next({ ctx: { ...ctx, territory } });
+  return next();
 });
 
 const optionalText = (schema: z.ZodString) => z.union([schema, z.literal("")]).optional().transform((value) => value || undefined);
@@ -98,15 +97,10 @@ export const appRouter = router({
   }),
   farmer: router({
     snapshot: protectedProcedure.query(({ ctx }) => getFarmerSnapshot(ctx.user.id)),
-    analytics: protectedProcedure.query(async ({ ctx }) => {
-      const snapshot = await getFarmerSnapshot(ctx.user.id);
-      const profile = snapshot.profile;
-      return getAdminOverview(profile?.state ? { state: profile.state, district: profile.district ?? undefined } : undefined);
-    }),
     crops: protectedProcedure.query(({ ctx }) => getOwnerCrops(ctx.user.id)),
     scans: protectedProcedure.query(({ ctx }) => getOwnerScans(ctx.user.id)),
     verifiedExperts: protectedProcedure.input(z.object({ state: z.string().max(100).optional(), district: z.string().max(100).optional() }).optional()).query(({ input }) => getVerifiedExperts(input)),
-    approvedDrugStores: protectedProcedure.input(z.object({ state: z.string().max(100).optional(), district: z.string().max(100).optional() }).optional()).query(({ input }) => getApprovedDrugStores(input)),
+    approvedDrugStores: protectedProcedure.query(() => getApprovedDrugStores()),
     createCrop: protectedProcedure.input(z.object({ name: z.string().min(2).max(120), cropType: z.string().min(2).max(80), region: z.string().max(160).optional() })).mutation(({ ctx, input }) => createCrop({ ownerId: ctx.user.id, ...input })),
     cases: protectedProcedure.query(({ ctx }) => getOwnerCases(ctx.user.id)),
     updateCase: protectedProcedure.input(z.object({ id: z.number(), reference: z.string().optional(), status: z.enum(["open", "resolved"]).optional() })).mutation(async ({ input }) => { await updateCase(input.id, input); return { success: true }; }),
@@ -304,13 +298,13 @@ export const appRouter = router({
     allOutbreaks: protectedProcedure.query(() => getAllOutbreaks()),
   }),
   admin: router({
-    overview: adminProcedure.query(({ ctx }) => getAdminOverview(ctx.territory)),
-    directory: adminProcedure.query(({ ctx }) => getApprovedDirectory(ctx.territory)),
-    farmerInsights: adminProcedure.query(({ ctx }) => getAdminFarmerInsights(ctx.territory)),
+    overview: adminProcedure.query(() => getAdminOverview()),
+    directory: adminProcedure.query(() => getApprovedDirectory()),
+    farmerInsights: adminProcedure.query(() => getAdminFarmerInsights()),
     setFarmerStatus: adminProcedure.input(z.object({ id: z.number().int().positive(), accountStatus: z.enum(["active", "disabled"]) })).mutation(({ input }) => setFarmerAccountStatus(input.id, input.accountStatus)),
     deleteFarmer: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => deleteFarmerAccount(input.id)),
-    locationSummaries: adminProcedure.query(({ ctx }) => getAdminLocationSummaries(ctx.territory)),
-    cases: adminProcedure.query(({ ctx }) => getApprovedCases(ctx.territory)),
+    locationSummaries: adminProcedure.query(() => getAdminLocationSummaries()),
+    cases: adminProcedure.query(() => getApprovedCases()),
     approveScan: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => approveScan(input.id)),
     experts: adminProcedure.query(() => getAdminExperts()),
     createExpert: adminProcedure.input(z.object({ name: z.string().min(2).max(160), phone: z.string().max(40).optional(), email: z.string().email().optional(), qualification: z.string().max(240).optional(), specialization: z.string().max(240).optional(), organization: z.string().max(240).optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), availability: z.string().max(160).optional() })).mutation(({ input }) => createExpert(input)),
@@ -319,8 +313,7 @@ export const appRouter = router({
     createDrugStore: adminProcedure.input(z.object({ name: z.string().min(2).max(200), address: z.string().min(4), phone: z.string().max(40).optional(), email: z.string().email().optional(), state: z.string().max(100).optional(), district: z.string().max(100).optional(), pinCode: z.string().max(12).optional(), licenseInfo: z.string().max(2000).optional(), categories: z.string().max(500).optional(), openingHours: z.string().max(160).optional() })).mutation(({ input }) => createDrugStore(input)),
     setDrugStoreStatus: adminProcedure.input(z.object({ id: z.number().int().positive(), status: z.enum(["pending", "approved", "rejected", "suspended"]) })).mutation(({ input }) => setDrugStoreStatus(input.id, input.status)),
     regionalOutbreaks: adminProcedure.query(() => getAllOutbreaks()),
-    riskOverview: adminProcedure.query(({ ctx }) => getRiskPredictionStats(ctx.territory)),
-    territoryRisks: adminProcedure.query(({ ctx }) => getTerritoryRiskData(ctx.territory)),
+    riskOverview: adminProcedure.query(() => getRiskPredictionStats()),
     escalateOutbreak: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => escalateOutbreak(input.id)),
     resolveOutbreak: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(({ input }) => resolveOutbreak(input.id)),
     seedTestData: adminProcedure.mutation(async () => {

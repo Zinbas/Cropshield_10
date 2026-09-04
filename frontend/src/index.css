@@ -1146,8 +1146,6 @@ textarea:focus-visible {
 .weather-reading span,
 .weather-reading small,
 .weather-note { font-size: 12px; color: var(--muted); }
-.weather-metrics { display: flex; gap: 12px; align-items: center; margin-top: 2px; }
-.weather-metrics span { display: flex; align-items: center; gap: 4px; }
 .weather-state { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
 .weather-state p { margin: 0; }
 .weather-guidance { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: var(--radius-md); font-size: 13px; }
@@ -1438,17 +1436,13 @@ textarea:focus-visible {
 .result-banner .eyebrow { color: #047857; }
 
 .result-card { padding: 24px; border-radius: var(--radius-xl); }
-.result-hero { position: relative; height: 180px; background-size: cover; background-position: center; border-radius: var(--radius-xl) var(--radius-xl) 0 0; margin: -24px -24px 24px -24px; }
-.result-hero-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%); border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
-.result-status-card { position: absolute; bottom: -44px; left: 24px; right: 24px; padding: 16px; background: var(--surface); border-radius: var(--radius-lg); box-shadow: 0 4px 12px rgba(0,0,0,0.1); display: grid; gap: 4px; border: 1px solid var(--line); z-index: 10; }
-.result-status-card.risk-high { border-color: var(--red-light); }
-.result-status-card.risk-medium { border-color: var(--amber-light); }
-.result-status-card.risk-low { border-color: var(--green-light); }
-.result-status-card h2 { margin: 0; font-size: 20px; color: var(--ink); }
-.result-status-card p.diagnosis-line { margin: 0; font-size: 14px; color: var(--ink-secondary); }
-.confidence-badge { position: absolute; right: 16px; top: 16px; text-align: right; }
-.confidence-badge strong { display: block; font-size: 24px; font-weight: 800; color: var(--primary); line-height: 1; margin-bottom: 2px; }
-.confidence-badge span { font-size: 9px; letter-spacing: 0.1em; color: var(--muted); font-weight: 700; }
+.result-top { display: flex; justify-content: space-between; gap: 14px; }
+.result-top h2 { margin: 10px 0 4px; font-size: 22px; }
+.result-top p { font-size: 13px; color: var(--muted); line-height: 1.5; }
+.diagnosis-line { margin: 4px 0 0; }
+.confidence { text-align: right; display: grid; align-content: start; }
+.confidence strong { font-size: 28px; color: var(--primary); }
+.confidence span { font-size: 9px; letter-spacing: 0.1em; color: var(--muted); }
 
 .result-grid { display: grid; gap: 12px; margin: 18px 0; }
 @media (min-width: 768px) { .result-grid { grid-template-columns: 1fr 1fr; } }

@@ -310,6 +310,8 @@ export function RiskPredictionPanel({ onNavigateToScan }: { onNavigateToScan?: (
   const predictMutation = trpc.risk.predict.useMutation({
     onSuccess: () => {
       utils.risk.active.invalidate();
+      utils.risk.allOutbreaks.invalidate();
+      utils.risk.outbreaks.invalidate();
     },
     onError: (err) => toast.error(err.message || "Prediction failed"),
   });
@@ -320,6 +322,8 @@ export function RiskPredictionPanel({ onNavigateToScan }: { onNavigateToScan?: (
   const dismissMutation = trpc.risk.dismiss.useMutation({
     onSuccess: () => {
       utils.risk.active.invalidate();
+      utils.risk.allOutbreaks.invalidate();
+      utils.risk.outbreaks.invalidate();
       toast.success("Alert dismissed");
     },
   });
